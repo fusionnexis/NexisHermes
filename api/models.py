@@ -339,6 +339,7 @@ class Session:
                 enabled_toolsets=None,
                 composer_draft=None,
                 role: str=None,
+                kanban_task_id: str=None,
                 **kwargs):
         self.session_id = session_id or uuid.uuid4().hex[:12]
         self.title = title
@@ -380,6 +381,7 @@ class Session:
         self.composer_draft = composer_draft if isinstance(composer_draft, dict) else {}
         _role = str(role or 'coder').strip().lower()
         self.role = _role if _role in self._VALID_ROLES else 'coder'
+        self.kanban_task_id = kanban_task_id or None
         self._metadata_message_count = None
 
     @property
@@ -583,6 +585,7 @@ class Session:
             'gateway_routing': self.gateway_routing,
             'gateway_routing_history': self.gateway_routing_history,
             'role': self.role,
+            'kanban_task_id': self.kanban_task_id,
             # Only emit 'parent_session_id' when set (the /branch fork link, #1342).
             # Sessions without a fork must not leak None — see test_session_lineage_metadata_api.
             **({'parent_session_id': self.parent_session_id} if self.parent_session_id else {}),
@@ -898,7 +901,8 @@ def get_session(sid, metadata_only=False):
         return s
     raise KeyError(sid)
 
-def new_session(workspace=None, model=None, profile=None, model_provider=None, project_id=None):
+def new_session(workspace=None, model=None, profile=None, model_provider=None,
+                project_id=None, role=None, kanban_task_id=None):
     """Create a new in-memory session.
 
     The session lives in the SESSIONS dict only — no disk write happens until
@@ -935,6 +939,8 @@ def new_session(workspace=None, model=None, profile=None, model_provider=None, p
         model_provider=model_provider,
         profile=profile,
         project_id=project_id,
+        role=role,
+        kanban_task_id=kanban_task_id,
     )
     with LOCK:
         SESSIONS[s.session_id] = s

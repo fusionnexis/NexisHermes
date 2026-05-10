@@ -291,7 +291,7 @@
   }
   body{background:var(--bg);color:var(--text);height:100vh;height:100dvh;overflow:hidden;display:flex;flex-direction:column;}
   .layout{display:flex;width:100%;flex:1 1 auto;min-height:0;}
-  .app-titlebar{display:flex;align-items:center;justify-content:center;height:38px;flex-shrink:0;background:var(--sidebar);border-bottom:1px solid var(--border);padding:0 12px;padding-top:var(--app-titlebar-safe-top);padding-left:max(12px,env(safe-area-inset-left,0));padding-right:max(12px,env(safe-area-inset-right,0));box-sizing:content-box;font-size:12px;color:var(--muted);user-select:none;-webkit-app-region:drag;position:relative;z-index:20;}
+  .app-titlebar{display:none!important;}
   .app-titlebar-inner{display:flex;align-items:center;gap:8px;min-width:0;max-width:100%;justify-content:center;}
   .system-health-panel.insights-card{display:flex;flex-direction:column;gap:12px;color:var(--muted);}
   .system-health-panel.unavailable{display:none;}
@@ -3650,7 +3650,53 @@ main.main.showing-insights > #mainInsights{display:flex;overflow-y:auto;}
 .kanban-badge.tenant{color:var(--text)}
 .kanban-badge.worktree{color:#4ade80;border-color:#4ade80}
 .kanban-badge.size{color:var(--text);background:var(--input-bg);border-color:var(--border);font-weight:600}
+.kanban-badge.session{color:#60a5fa;border-color:#60a5fa}
 .role-badge{border:1px solid var(--border);border-radius:999px;padding:1px 6px;font-size:10px;font-weight:600;margin-left:4px;vertical-align:middle}
+/* Hide sidebar panel area when kanban is active — board fills the full main area */
+body.kanban-mode .sidebar,
+.layout:has(main.showing-kanban) .sidebar { width: 0 !important; border-right: none !important; overflow: hidden !important; }
+/* Fallback: panelKanban is empty so hide it to prevent the sidebar from showing */
+.panel-view#panelKanban { display: none !important; }
+.kanban-main-header{flex-wrap:nowrap!important;gap:8px}
+.kanban-header-left{display:flex;align-items:center;gap:8px;flex:1;min-width:0;overflow:hidden}
+.kanban-header-title{font-size:14px;font-weight:650;color:var(--text);white-space:nowrap;flex-shrink:0;letter-spacing:-.01em}
+/* Compact search — fixed width, no flex-grow */
+.kanban-board-search{display:flex;align-items:center;gap:5px;background:var(--input-bg);border:1px solid var(--border);border-radius:7px;padding:3px 8px;width:180px;flex-shrink:0}
+.kanban-board-search input{background:none;border:none;outline:none;color:var(--text);font-size:12px;width:100%}
+/* Compact filter selects */
+.kanban-header-filter{background:var(--input-bg);border:1px solid var(--border);border-radius:7px;color:var(--text);font-size:12px;padding:3px 6px;cursor:pointer;flex-shrink:0;max-width:110px}
+.kanban-header-filter:focus{outline:none;border-color:var(--accent)}
+.kanban-summary{flex-shrink:0;font-size:12px;color:var(--muted);white-space:nowrap;padding-left:4px}
+/* Hide empty board switcher icon (prevents orphan ⊙ circle) */
+.kanban-board-switcher-icon:empty{display:none}
+.kanban-board-switcher[hidden]{display:none!important}
+/* Task detail modal fields */
+.kanban-detail-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0;background:var(--input-bg);border:1px solid var(--border);border-radius:8px;padding:12px}
+.kanban-detail-field{display:flex;flex-direction:column;gap:2px}
+.kanban-detail-field-label{font-size:10px;font-weight:650;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.kanban-detail-field-val{font-size:13px;color:var(--text)}
+.kanban-detail-role-tag{border-radius:999px;padding:2px 10px;font-size:11px;font-weight:600;display:inline-block}
+.kanban-detail-section-head{font-size:11px;font-weight:650;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:14px 0 6px;border-top:1px solid var(--border);padding-top:12px}
+.kanban-detail-empty-sec{font-size:12px;color:var(--muted);padding:6px 0}
+.kanban-detail-desc{font-size:13px;color:var(--text);line-height:1.6;padding:0 0 8px}
+.kanban-detail-empty-desc{font-size:12px;color:var(--muted);font-style:italic;padding:0 0 8px}
+.kanban-detail-status-active{border-color:var(--accent)!important;color:var(--accent)!important}
+.kanban-detail-event-row{display:flex;justify-content:space-between;font-size:11px;padding:3px 0;border-bottom:1px solid var(--border)}
+.kanban-detail-event-kind{color:var(--text);font-weight:500}
+.kanban-detail-event-meta{color:var(--muted)}
+.kanban-card-role-flag{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:4px;vertical-align:middle;flex-shrink:0}
+/* Task detail modal */
+.kanban-task-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;display:flex;align-items:center;justify-content:center;padding:16px}
+.kanban-task-modal-overlay[hidden]{display:none}
+.kanban-task-modal{background:var(--bg);border:1px solid var(--border);border-radius:12px;width:100%;max-width:620px;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.3)}
+.kanban-task-modal-header{display:flex;align-items:flex-start;gap:12px;padding:16px 20px 12px;border-bottom:1px solid var(--border);flex-shrink:0}
+.kanban-task-modal-title{flex:1;font-size:16px;font-weight:650;color:var(--text);line-height:1.4}
+.kanban-task-modal-header-actions{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.kanban-task-modal-close{background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:4px 8px;border-radius:6px;line-height:1}
+.kanban-task-modal-close:hover{background:var(--input-bg);color:var(--text)}
+.kanban-task-modal-body{flex:1;overflow-y:auto;padding:16px 20px}
+.kanban-comment-form{padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:8px;flex-shrink:0}
+.kanban-comment-form textarea{flex:1;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;resize:none;padding:6px 8px}
 .kanban-detail-worktree{display:flex;align-items:center;gap:8px;margin:8px 0;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg)}
 .kanban-detail-worktree-path{font-size:10px;color:var(--muted)}
 .kanban-detail-worktree .btn{font-size:11px;padding:4px 8px}

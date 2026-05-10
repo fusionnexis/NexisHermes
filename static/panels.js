@@ -37,6 +37,7 @@ const APP_TITLEBAR_KEYS = {
   chat: 'tab_chat', tasks: 'tab_tasks', skills: 'tab_skills',
   memory: 'tab_memory', workspaces: 'tab_workspaces',
   profiles: 'tab_profiles', todos: 'tab_todos', insights: 'tab_insights', logs: 'tab_logs', settings: 'tab_settings',
+  kanban: null, // kanban board is full-width — no titlebar label needed
 };
 
 /**
@@ -58,7 +59,12 @@ function syncAppTitlebar() {
     if (S.session.is_cli_session) sourceLabel = S.session.source_label || S.session.source_tag || S.session.raw_source || '';
   } else {
     const key = APP_TITLEBAR_KEYS[panel];
-    mainText = key && typeof t === 'function' ? t(key) : (panel.charAt(0).toUpperCase() + panel.slice(1));
+    // null key = suppress titlebar label for this panel (e.g. kanban full-width board)
+    if (key === null) {
+      mainText = '';
+    } else {
+      mainText = key && typeof t === 'function' ? t(key) : (panel.charAt(0).toUpperCase() + panel.slice(1));
+    }
   }
 
   // Don't touch the element while an inline rename is in progress — replacing
@@ -190,6 +196,8 @@ async function switchPanel(name, opts = {}) {
     if (typeof _kanbanStopPolling === 'function') _kanbanStopPolling();
   }
   _currentPanel = nextPanel;
+  // Toggle body class for kanban full-width mode (sidebar collapses via CSS)
+  document.body.classList.toggle('kanban-mode', nextPanel === 'kanban');
   // Update nav tabs (rail + mobile sidebar-nav share data-panel)
   document.querySelectorAll('[data-panel]').forEach(t => t.classList.toggle('active', t.dataset.panel === nextPanel));
   // Update panel views
@@ -1002,14 +1010,16 @@ function _kanbanCurrentFilters(){
   const tenant = tenantEl ? (tenantEl.value || tenantEl.dataset.defaultValue || '') : '';
   const includeArchived = !!($('kanbanIncludeArchived') && $('kanbanIncludeArchived').checked);
   const onlyMine = !!($('kanbanOnlyMine') && $('kanbanOnlyMine').checked);
-  return {q, assignee, tenant, includeArchived, onlyMine};
+  const roleFilter = $('kanbanRoleFilter') ? $('kanbanRoleFilter').value : '';
+  const priorityFilter = $('kanbanPriorityFilter') ? $('kanbanPriorityFilter').value : '';
+  return {q, assignee, tenant, includeArchived, onlyMine, roleFilter, priorityFilter};
 }
 
 function _kanbanApplyConfigDefaults(config){
   if (!config || _kanbanConfigApplied) return;
   if ($('kanbanTenantFilter') && config.default_tenant) $('kanbanTenantFilter').dataset.defaultValue = config.default_tenant;
   if ($('kanbanIncludeArchived') && config.include_archived_by_default === true) $('kanbanIncludeArchived').checked = true;
-  if (config.lane_by_profile === true) _kanbanLanesByProfile = true;
+  if (config.lane_by_profile === true) _kanbanLanesByProfile = false; // always flat columns — no per-assignee swimming lanes
   _kanbanConfigApplied = true;
 }
 let _kanbanConfigApplied = false;
@@ -1028,10 +1038,20 @@ function _kanbanVisibleTasks(){
   const columns = (_kanbanBoard && _kanbanBoard.columns) || [];
   return columns.map(col => {
     const tasks = (col.tasks || []).filter(task => {
-      if (!filters.q) return true;
-      const haystack = [task.id, _kanbanTaskTitle(task), _kanbanTaskBody(task), task.assignee, task.tenant]
-        .filter(Boolean).join(' ').toLowerCase();
-      return haystack.includes(filters.q);
+      if (filters.q) {
+        const haystack = [task.id, _kanbanTaskTitle(task), _kanbanTaskBody(task), task.assignee, task.tenant]
+          .filter(Boolean).join(' ').toLowerCase();
+        if (!haystack.includes(filters.q)) return false;
+      }
+      if (filters.roleFilter) {
+        const parts = (task.assignee || '').split('/');
+        const role = parts.length > 1 ? parts[1] : parts[0];
+        if (role !== filters.roleFilter) return false;
+      }
+      if (filters.priorityFilter !== '') {
+        if (String(task.priority ?? 0) !== filters.priorityFilter) return false;
+      }
+      return true;
     });
     return {...col, tasks};
   });
@@ -1180,13 +1200,12 @@ function _kanbanRenderBoard(){
   }
   const columns = _kanbanVisibleTasks();
   const total = columns.reduce((n, col) => n + (col.tasks || []).length, 0);
-  if ($('kanbanSummary')) $('kanbanSummary').textContent = String(t('kanban_visible_tasks')).replace('{0}', total);
-  _kanbanRenderSidebar(columns);
+  if ($('kanbanSummary')) $('kanbanSummary').textContent = total ? `${total} task${total === 1 ? '' : 's'}` : '';
   if (total === 0) {
     board.innerHTML = _kanbanEmptyBoardHtml();
     return;
   }
-  board.innerHTML = _kanbanLanesByProfile ? _kanbanRenderProfileLanes(columns) : columns.map(_kanbanRenderColumn).join('');
+  board.innerHTML = columns.map(_kanbanRenderColumn).join('');
 }
 
 function _kanbanCard(task, status){
@@ -1197,7 +1216,14 @@ function _kanbanCard(task, status){
   const age = _kanbanTaskAge(task);
   const stale = _kanbanCardStalenessClass(task);
   const body = _kanbanTaskBody(task);
-  const assignee = task.assignee ? `<span class="kanban-card-assignee">@${esc(task.assignee)}</span>` : `<span class="kanban-card-unassigned">${esc(t('kanban_unassigned'))}</span>`;
+  // Role flag: extract role from "profile/role" format assignee
+  const _ROLE_COLORS = {qa:'#4ade80',planner:'#a78bfa',reviewer:'#fb923c',coder:'#60a5fa'};
+  const _assigneeParts = (task.assignee || '').split('/');
+  const _roleKey = _assigneeParts.length > 1 ? _assigneeParts[1] : _assigneeParts[0];
+  const _profileName = _assigneeParts[0];
+  const assignee = task.assignee
+    ? `<span class="kanban-card-role-flag" style="background:${_ROLE_COLORS[_roleKey]||'var(--muted)'}" title="${esc(_roleKey)}"></span><span class="kanban-card-assignee">${esc(_profileName)}</span>`
+    : '';
   // Worktree badge: show branch name when task uses a worktree workspace
   const wtBadge = (task.workspace_kind === 'worktree' && task.workspace_path)
     ? (() => { const branch = task.workspace_path.split('/').pop(); return `<span class="kanban-badge worktree" data-testid="worktree-badge">🌳 ${esc(branch)}</span>`; })()
@@ -1206,8 +1232,12 @@ function _kanbanCard(task, status){
   const sizeBadge = task.task_size
     ? `<span class="kanban-badge size" data-testid="size-badge">${esc({small:'S',medium:'M',large:'L'}[task.task_size]||task.task_size)}</span>`
     : '';
+  // Session badge: show when task is bound to a session (running state)
+  const sessionBadge = task.session_id
+    ? `<span class="kanban-badge session" data-testid="session-badge">🔗 ${esc(String(task.session_id).slice(0,6))}</span>`
+    : '';
   return `<article class="kanban-card ${esc(stale)}" data-kanban-task-id="${esc(task.id)}" draggable="true" ondragstart="dragKanbanTask(event, '${esc(task.id)}')" onclick="loadKanbanTask('${esc(task.id)}')" tabindex="0" role="button" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();loadKanbanTask('${esc(task.id)}')}">
-    <div class="kanban-card-topline"><span class="kanban-card-id">${esc(task.id || '')}</span>${priority ? `<span class="kanban-badge priority">P${priority}</span>` : ''}${task.tenant ? `<span class="kanban-badge tenant">${esc(task.tenant)}</span>` : ''}${wtBadge}${sizeBadge}</div>
+    <div class="kanban-card-topline"><span class="kanban-card-id">${esc(task.id || '')}</span>${priority ? `<span class="kanban-badge priority">P${priority}</span>` : ''}${task.tenant ? `<span class="kanban-badge tenant">${esc(task.tenant)}</span>` : ''}${wtBadge}${sizeBadge}${sessionBadge}</div>
     <div class="kanban-card-title">${esc(_kanbanTaskTitle(task))}</div>
     ${body ? `<div class="kanban-card-body">${_kanbanRenderMarkdown(body)}</div>` : ''}
     <div class="kanban-card-meta">${assignee}${comments ? `<span class="kanban-card-metric">💬 ${comments}</span>` : ''}${linkTotal ? `<span class="kanban-card-metric">↔ ${linkTotal}</span>` : ''}${age ? `<span class="kanban-card-age">${esc(age)}</span>` : ''}</div>
@@ -1535,11 +1565,10 @@ async function unblockKanbanTask(taskId){
 
 function closeKanbanTaskDetail(){
   _kanbanCurrentTaskId = null;
+  const overlay = $('kanbanTaskModalOverlay');
+  if (overlay) { overlay.hidden = true; }
   const preview = $('kanbanTaskPreview');
-  if (preview) {
-    preview.style.display = 'none';
-    preview.innerHTML = '';
-  }
+  if (preview) preview.innerHTML = '';
   const board = $('kanbanBoard');
   if (board) board.querySelectorAll('.kanban-card').forEach(card => card.classList.remove('selected'));
 }
@@ -2054,46 +2083,102 @@ async function addKanbanComment(taskId){
 
 function _kanbanRenderTaskDetail(data){
   const task = data.task || {};
-  const log = data.log || {};
   const title = _kanbanTaskTitle(task);
-  const body = _kanbanTaskBody(task) || t('kanban_no_description');
-  const meta = _kanbanTaskMeta(task);
+  const body = _kanbanTaskBody(task);
   const comments = data.comments || [];
-  const events = data.events || [];
-  const links = data.links || {};
-  const runs = data.runs || [];
-  // Note: 'running' is intentionally absent — entering 'running' is the
-  // dispatcher/claim_task path's responsibility, not a user UI write. The
-  // bridge rejects PATCH status='running' with HTTP 400 to match the agent
-  // dashboard plugin's contract. UI users want to claim/promote a ready task
-  // via the dispatcher Nudge button, not flip it to running by hand.
-  const statusButtons = ['triage', 'todo', 'ready', 'blocked', 'done', 'archived'].map(status =>
-    `<button class="btn secondary" onclick="updateKanbanTask('${esc(task.id)}',{status:'${status}'})">${esc(_kanbanColumnLabel(status))}</button>`
-  ).join('') + `<button class="btn secondary" onclick="blockKanbanTask('${esc(task.id)}')">${esc(t('kanban_block'))}</button><button class="btn secondary" onclick="unblockKanbanTask('${esc(task.id)}')">${esc(t('kanban_unblock'))}</button>`;
-  // Worktree section: show status + create/remove actions
-  const wtSection = task.workspace_kind === 'worktree' && task.workspace_path
-    ? `<div class="kanban-detail-worktree"><span class="kanban-badge worktree" data-testid="worktree-badge-detail">🌳 ${esc(task.workspace_path.split('/').pop())}</span><span class="kanban-detail-worktree-path">${esc(task.workspace_path)}</span><button class="btn secondary" onclick="removeWorktreeFromTask('${esc(task.id)}')">Remove Worktree</button></div>`
-    : `<div class="kanban-detail-worktree"><button class="btn secondary" onclick="createWorktreeForTask('${esc(task.id)}')">Create Worktree</button></div>`;
-  return `<div class="kanban-task-preview-header">
-      <button class="btn secondary kanban-back-btn" onclick="closeKanbanTaskDetail()">${esc(t('kanban_back_to_board'))}</button>
-      <div class="kanban-task-preview-title">${esc(title)}</div>
-      <button class="btn secondary kanban-edit-btn" onclick="openKanbanEdit('${esc(task.id)}')" data-i18n="kanban_edit_task" title="${esc(t('kanban_edit_task') || 'Edit task')}">${esc(t('kanban_edit_task') || 'Edit task')}</button>
+  const events = (data.events || []).slice(0, 20); // change history
+
+  // Role tag from assignee "profile/role" format
+  const _ROLE_COLORS = {qa:'#4ade80',planner:'#a78bfa',reviewer:'#fb923c',coder:'#60a5fa'};
+  const _ap = (task.assignee || '').split('/');
+  const _roleKey = _ap.length > 1 ? _ap[1] : (_ap[0] || '');
+  const _profileName = _ap[0] || '';
+  const roleTag = _roleKey
+    ? `<span class="kanban-detail-role-tag" style="background:${_ROLE_COLORS[_roleKey]||'var(--input-bg)'};color:${_ROLE_COLORS[_roleKey] ? '#fff' : 'var(--text)'}">${esc(_roleKey)}</span>`
+    : '';
+
+  // Story points (task_size)
+  const sizeMap = {small:'1 pt',medium:'3 pts',large:'8 pts'};
+  const storyPoints = task.task_size ? sizeMap[task.task_size] || task.task_size : '—';
+
+  // Priority
+  const priorityLabel = task.priority ? `P${task.priority}` : 'P0';
+
+  // Worktree
+  const wtDisplay = task.workspace_path
+    ? `<span class="kanban-badge worktree">🌳 ${esc(task.workspace_path.split('/').pop())}</span> <span style="font-size:11px;color:var(--muted)">${esc(task.workspace_path)}</span>`
+    : `<span style="color:var(--muted);font-size:12px">scratch (no isolation)</span>`;
+
+  // Progress
+  const progressDisplay = task.progress != null ? `${task.progress}%` : '—';
+
+  // Outcome/Result
+  const outcomeDisplay = task.result || task.last_failure_error || '—';
+
+  // Worktree actions
+  const wtActions = task.workspace_kind === 'worktree' && task.workspace_path
+    ? `<button class="btn secondary" onclick="removeWorktreeFromTask('${esc(task.id)}')">Remove</button>`
+    : `<button class="btn secondary" onclick="createWorktreeForTask('${esc(task.id)}')">Create Worktree</button>`;
+
+  // Claim button
+  const claimBtn = (task.status === 'ready' && !task.session_id)
+    ? `<button class="btn primary" data-testid="claim-task-btn" onclick="claimKanbanTask('${esc(task.id)}')">Claim Task</button>`
+    : '';
+
+  // Status actions
+  const statusButtons = ['triage', 'todo', 'ready', 'blocked', 'done'].map(s =>
+    `<button class="btn secondary${task.status === s ? ' kanban-detail-status-active' : ''}" onclick="updateKanbanTask('${esc(task.id)}',{status:'${s}'})">${esc(_kanbanColumnLabel(s))}</button>`
+  ).join('');
+
+  return `<div class="kanban-task-modal-header">
+      <div class="kanban-task-modal-title">${esc(title)}</div>
+      <div class="kanban-task-modal-header-actions">
+        <button class="btn secondary" onclick="openKanbanEdit('${esc(task.id)}')">${esc(t('kanban_edit_task') || 'Edit')}</button>
+        <button class="kanban-task-modal-close" onclick="closeKanbanTaskDetail()" aria-label="Close">✕</button>
+      </div>
     </div>
-    <div class="kanban-task-preview-body">${esc(body)}</div>
-    ${meta.length ? `<div class="kanban-meta">${esc(meta.join(' · '))}</div>` : ''}
-    <div class="kanban-status-actions">${statusButtons}</div>
-    ${wtSection}
-    <div class="kanban-detail-grid">
-      ${_kanbanDetailSection('kanban-detail-comments', String(t('kanban_comments_count')).replace('{0}', comments.length), comments.map(_kanbanCommentHtml).join(''), 'kanban_no_comments')}
-      ${_kanbanDetailSection('kanban-detail-events', String(t('kanban_events_count')).replace('{0}', events.length), events.map(_kanbanEventHtml).join(''), 'kanban_no_events')}
-      ${_kanbanDetailSection('kanban-detail-links', t('kanban_links'), _kanbanLinksHtml(links), 'kanban_empty')}
-      ${_kanbanDetailSection('kanban-detail-runs', String(t('kanban_runs_count')).replace('{0}', runs.length), runs.map(_kanbanRunHtml).join(''), 'kanban_no_runs')}
-      ${_kanbanDetailSection('kanban-detail-log', t('kanban_worker_log'), log.content ? `<pre class="kanban-detail-pre">${esc(log.content)}</pre>` : '', 'kanban_empty')}
+    <div class="kanban-task-modal-body">
+      ${body ? `<div class="kanban-detail-desc">${_kanbanRenderMarkdown(esc(body))}</div>` : `<div class="kanban-detail-desc kanban-detail-empty-desc">${esc(t('kanban_no_description'))}</div>`}
+
+      <div class="kanban-detail-fields">
+        <div class="kanban-detail-field"><span class="kanban-detail-field-label">Story Points</span><span class="kanban-detail-field-val">${esc(storyPoints)}</span></div>
+        <div class="kanban-detail-field"><span class="kanban-detail-field-label">Role</span><span class="kanban-detail-field-val">${roleTag || `<span style="color:var(--muted)">—</span>`}</span></div>
+        <div class="kanban-detail-field"><span class="kanban-detail-field-label">Priority</span><span class="kanban-detail-field-val"><span class="kanban-badge priority">${esc(priorityLabel)}</span></span></div>
+        <div class="kanban-detail-field"><span class="kanban-detail-field-label">Worktree</span><span class="kanban-detail-field-val">${wtDisplay} ${wtActions}</span></div>
+        <div class="kanban-detail-field"><span class="kanban-detail-field-label">Progress</span><span class="kanban-detail-field-val">${esc(progressDisplay)}</span></div>
+        <div class="kanban-detail-field"><span class="kanban-detail-field-label">Outcome</span><span class="kanban-detail-field-val" style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(String(outcomeDisplay))}">${esc(String(outcomeDisplay))}</span></div>
+      </div>
+
+      <div class="kanban-detail-section-head">Move to</div>
+      <div class="kanban-status-actions">${statusButtons}${claimBtn}</div>
+
+      <div class="kanban-detail-section-head">${esc(String(t('kanban_comments_count')).replace('{0}', comments.length))}</div>
+      ${comments.length ? comments.map(_kanbanCommentHtml).join('') : `<div class="kanban-detail-empty-sec">${esc(t('kanban_no_comments'))}</div>`}
+
+      ${events.length ? `<div class="kanban-detail-section-head">Change History</div>${events.map(e => `<div class="kanban-detail-event-row"><span class="kanban-detail-event-kind">${esc(e.kind||'')}</span><span class="kanban-detail-event-meta">${esc(_formatRelTime(e.created_at))}</span></div>`).join('')}` : ''}
     </div>
     <div class="kanban-comment-form">
       <textarea id="kanbanCommentInput" rows="2" placeholder="${esc(t('kanban_add_comment'))}"></textarea>
       <button class="btn primary" onclick="addKanbanComment('${esc(task.id)}')">${esc(t('kanban_add_comment'))}</button>
     </div>`;
+}
+
+// ── Workspace panel toggle ────────────────────────────────────────────────────
+
+function _formatRelTime(ts){
+  if (!ts) return '';
+  const diff = Math.floor(Date.now()/1000 - ts);
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+  return `${Math.floor(diff/86400)}d ago`;
+}
+
+function toggleWorkspacePanel(){
+  if (typeof _setWorkspacePanelMode === 'function') {
+    const isOpen = document.documentElement.dataset.workspacePanel === 'open';
+    _setWorkspacePanelMode(isOpen ? 'closed' : 'browse');
+  }
 }
 
 // ── Worktree management helpers ──────────────────────────────────────────────
@@ -2134,6 +2219,20 @@ async function createWorktreeFromModal(){
   } catch(e) {
     if (resultEl) resultEl.textContent = e.message || String(e);
     if (btn) btn.disabled = false;
+  }
+}
+
+async function claimKanbanTask(taskId){
+  try {
+    const resp = await api('/api/kanban/claim', {
+      method: 'POST',
+      body: JSON.stringify({task_id: taskId, create_worktree: true}),
+    });
+    showToast(`Task claimed — session ${resp.session?.session_id?.slice(0,6) || '?'}`);
+    await loadKanban(true);
+    await loadKanbanTask(taskId);
+  } catch(e) {
+    showToast('Claim failed: ' + (e.message || e), 'error');
   }
 }
 
@@ -2181,22 +2280,25 @@ async function loadKanbanTask(taskId){
   if (!taskId) return;
   try {
     const data = await api('/api/kanban/tasks/' + encodeURIComponent(taskId) + _kanbanBoardQuery());
-    const logEndpoint = '/api/kanban/tasks/' + encodeURIComponent(taskId) + '/log' + _kanbanBoardQuery();
-    try { data.log = await api(logEndpoint + '?tail=65536'); } catch(e) { data.log = {}; }
+    // Fetch comments and events for the detail view
+    try {
+      const eventsResp = await api('/api/kanban/events?since=0&limit=50' + (_kanbanBoardQuery() ? _kanbanBoardQuery() : ''));
+      data.events = (eventsResp.events || []).filter(e => e.task_id === taskId).slice(0, 20);
+    } catch(e) { data.events = []; }
     _kanbanCurrentTaskId = taskId;
-    const task = data.task || {};
-    const title = _kanbanTaskTitle(task);
     const board = $('kanbanBoard');
     if (board) {
       board.querySelectorAll('.kanban-card').forEach(card => card.classList.remove('selected'));
       Array.from(board.querySelectorAll('.kanban-card')).find(card => card.dataset.kanbanTaskId === taskId)?.classList.add('selected');
     }
     const preview = $('kanbanTaskPreview');
+    const overlay = $('kanbanTaskModalOverlay');
     if (preview) {
-      preview.style.display = '';
       preview.innerHTML = _kanbanRenderTaskDetail(data);
     }
-    showToast(`${t('kanban_task')}: ${title}`);
+    if (overlay) {
+      overlay.hidden = false;
+    }
   } catch(e) { showToast(t('kanban_unavailable') + ': ' + (e.message || e), 'error'); }
 }
 

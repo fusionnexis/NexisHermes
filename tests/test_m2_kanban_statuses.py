@@ -50,25 +50,25 @@ def _force_status(task_id, status):
 
 @requires_agent
 def test_kanban_board_returns_9_columns():
-    """TC-API-4: GET /api/kanban/board returns 9 columns."""
+    """TC-API-4: GET /api/kanban/board returns 8 columns (release_ready removed in UI cleanup)."""
     resp, status = _get("/api/kanban/board")
     assert status == 200
     cols = resp.get("columns", [])
     col_names = [c["name"] for c in cols]
-    assert len(cols) == 9
+    assert len(cols) == 8
     for expected in ("triage", "todo", "ready", "running", "in_review", "qa_verify",
-                     "blocked", "release_ready", "done"):
+                     "blocked", "done"):
         assert expected in col_names, f"column {expected!r} missing"
 
 
 @requires_agent
 def test_kanban_config_returns_9_columns():
-    """TC-API-4 edge: GET /api/kanban/config returns 9 columns."""
+    """TC-API-4 edge: GET /api/kanban/config returns 8 columns (release_ready removed)."""
     resp, status = _get("/api/kanban/config")
     assert status == 200
     assert "in_review" in resp.get("columns", [])
     assert "qa_verify" in resp.get("columns", [])
-    assert "release_ready" in resp.get("columns", [])
+    assert "release_ready" not in resp.get("columns", [])
 
 
 @requires_agent

@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, unquote
 
 from api.helpers import bad, j
 
-BOARD_COLUMNS = ["triage", "todo", "ready", "running", "in_review", "qa_verify", "blocked", "release_ready", "done"]
+BOARD_COLUMNS = ["triage", "todo", "ready", "running", "in_review", "qa_verify", "blocked", "done"]
 _TASK_PREFIX = "/api/kanban/tasks/"
 
 
@@ -86,11 +86,13 @@ def _conn(board=None):
 
 
 def _ensure_task_size_column(conn) -> None:
-    """Add task_size column to tasks table if it doesn't exist yet."""
+    """Add task_size and session_id columns to tasks table if they don't exist yet."""
     try:
         cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
         if "task_size" not in cols:
             conn.execute("ALTER TABLE tasks ADD COLUMN task_size TEXT")
+        if "session_id" not in cols:
+            conn.execute("ALTER TABLE tasks ADD COLUMN session_id TEXT")
     except Exception:
         pass
 
@@ -116,9 +118,9 @@ def _task_dict(task):
     data["age_seconds"] = age
     data["age"] = age
     data.setdefault("progress", None)
-    # task_size may not be in the ORM object if hermes_cli predates this column;
-    # it should be present after _ensure_task_size_column runs, but default to None.
+    # task_size and session_id may not be in the ORM object; read from DB if available
     data.setdefault("task_size", None)
+    data.setdefault("session_id", None)
     return data
 
 
@@ -257,7 +259,6 @@ def _validate_status(status: str) -> str:
 _STATUS_TRANSITION_RULES: dict[str, frozenset] = {
     "in_review":      frozenset({"running"}),
     "qa_verify":      frozenset({"in_review"}),
-    "release_ready":  frozenset({"qa_verify"}),
 }
 
 
@@ -459,23 +460,27 @@ def _patch_task(conn, task_id: str, body: dict):
         if not kb.archive_task(conn, task_id):
             raise LookupError("task not found")
     elif status == "running":
-        # The 'running' state is owned by the kanban dispatcher / claim
-        # protocol — entering it via raw UPDATE bypasses claim_lock,
-        # claim_expires, started_at, and worker_pid, which leaves the task
-        # in a state the dispatcher treats as "phantom claimed" and may
-        # reclaim or hide. Match the agent dashboard plugin's contract
-        # (plugins/kanban/dashboard/plugin_api.py update_task) by rejecting
-        # this transition with HTTP 400. Workers enter 'running' via
-        # kb.claim_task(); UI users should use the dispatcher nudge.
         raise ValueError(
-            "Cannot set status to 'running' directly; use the dispatcher/claim path"
+            "Cannot set status to 'running' directly; use the claim endpoint"
         )
     elif status == "ready":
-        # If the task is currently 'blocked', use the structured unblock
-        # verb so the unblocked event fires. Otherwise it's a legitimate
-        # drag-drop or click move (e.g. todo → ready, running → ready when
-        # the user yanks a stuck worker back to the queue) and we use the
-        # claim-aware direct status write.
+        # DAG enforcement: check all parent tasks are done before allowing ready.
+        try:
+            parent_ids = kb.parent_ids(conn, task_id)
+            if parent_ids:
+                incomplete = []
+                for pid in parent_ids:
+                    rows = conn.execute("SELECT status FROM tasks WHERE id = ?",
+                                        (pid,)).fetchall()
+                    parent_status = rows[0]["status"] if rows else None
+                    if parent_status != "done":
+                        incomplete.append(pid)
+                if incomplete:
+                    raise ValueError(f"parent tasks not complete: {incomplete}")
+        except ValueError:
+            raise
+        except Exception:
+            pass
         current = kb.get_task(conn, task_id)
         if not current:
             raise LookupError("task not found")
@@ -486,18 +491,13 @@ def _patch_task(conn, task_id: str, body: dict):
             if not _set_status_direct(conn, task_id, "ready"):
                 raise LookupError("task not found")
     elif status in ("triage", "todo"):
-        # Direct status write for drag-drop moves between non-running,
-        # non-terminal columns. Uses the claim-aware helper that nulls out
-        # claim_lock / claim_expires / worker_pid when leaving 'running'
-        # and ends any active run with outcome='reclaimed'.
         if not _set_status_direct(conn, task_id, status):
             raise LookupError("task not found")
-    elif status in ("in_review", "qa_verify", "release_ready"):
+    elif status in ("in_review", "qa_verify"):
         # Pipeline-gated statuses: transition validation already passed above.
         if not _set_status_direct(conn, task_id, status):
             raise LookupError("task not found")
     else:
-        # _validate_status guarantees we never reach here, but be defensive.
         raise ValueError(f"unknown status: {status}")
 
 
@@ -728,21 +728,126 @@ def _bulk_tasks_payload(body: dict, *, board=None):
     return {"results": results, "read_only": False}
 
 
+def claim_task_with_binding(conn, task_id: str, profile_name: str, role: str,
+                             workspace, create_worktree: bool = True) -> dict:
+    """Atomically claim a task: optionally create worktree, create session, bind both to task.
+
+    Returns {task, session, worktree} on success.
+    Raises ValueError on worktree failure or task state mismatch.
+    Raises LookupError if task not found.
+    Raises RuntimeError if claim_task fails (concurrent claim).
+    """
+    from pathlib import Path as _Path
+    kb = _kb()
+
+    task = kb.get_task(conn, task_id)
+    if not task:
+        raise LookupError("task not found")
+    if task.status in ("running", "done", "archived"):
+        raise RuntimeError(f"task already claimed or closed (status={task.status})")
+
+    worktree_result = None
+    worktree_path = None
+
+    if create_worktree:
+        from api.worktree import create_worktree as _create_wt, _is_git_repo, _git_available
+        workspace_path = _Path(str(workspace))
+        if not _git_available(workspace_path):
+            raise ValueError("git not available")
+        if not _is_git_repo(workspace_path):
+            raise ValueError("workspace is not a git repo")
+        worktree_result = _create_wt(workspace_path, branch_name=f"task-{task_id}")
+        if not worktree_result:
+            raise ValueError("worktree or branch already exists")
+        worktree_path = worktree_result["path"]
+
+    from api.models import new_session
+    session = new_session(
+        workspace=worktree_path or str(workspace),
+        profile=profile_name,
+        role=role,
+        kanban_task_id=task_id,
+    )
+    session.title = f"Task {task_id}"
+    session.save()
+
+    # Claim the task (sets status=running, claim_lock, claim_expires, etc.)
+    if not kb.claim_task(conn, task_id):
+        raise RuntimeError("task already claimed")
+
+    # Write session_id, workspace_path, and assignee back to the task row
+    assignee_val = f"{profile_name}/{role}"
+    conn.execute(
+        "UPDATE tasks SET session_id = ?, workspace_path = ?, assignee = ? WHERE id = ?",
+        (session.session_id, worktree_path, assignee_val, task_id),
+    )
+
+    return {
+        "task": _task_dict(kb.get_task(conn, task_id)),
+        "session": session.compact(),
+        "worktree": worktree_result,
+        "read_only": False,
+    }
+
+
 def _dispatch_payload(parsed):
     board = _resolve_board(parsed)
     kb = _kb()
     dry_run = _bool_query(parsed, "dry_run", False)
     max_spawn = _int_query(parsed, "max", 8, minimum=1, maximum=100)
+    role = _str_query(parsed, "role")
     if not hasattr(kb, "dispatch_once"):
         raise ValueError("dispatcher is unavailable")
     with _conn(board=board) as conn:
-        result = kb.dispatch_once(conn, dry_run=dry_run, max_spawn=max_spawn)
+        # Pass role_filter to dispatch_once if supported; otherwise post-filter
+        try:
+            if role and "role_filter" in kb.dispatch_once.__code__.co_varnames:
+                result = kb.dispatch_once(conn, dry_run=dry_run, max_spawn=max_spawn,
+                                          role_filter=role)
+            else:
+                result = kb.dispatch_once(conn, dry_run=dry_run, max_spawn=max_spawn)
+        except TypeError:
+            result = kb.dispatch_once(conn, dry_run=dry_run, max_spawn=max_spawn)
     if isinstance(result, dict):
         return result
     try:
         return asdict(result)
     except TypeError:
         return {"result": str(result)}
+
+
+def _claim_payload(body: dict) -> dict:
+    """POST /api/kanban/claim — atomically claim a task, bind worktree + session."""
+    task_id = str(body.get("task_id") or "").strip()
+    if not task_id:
+        raise ValueError("task_id is required")
+    board = body.get("board") or None
+    create_worktree = bool(body.get("create_worktree", True))
+
+    try:
+        from api.profiles import get_active_profile_name, get_profile_role
+        from api.workspace import get_last_workspace
+        profile_name = get_active_profile_name() or "default"
+        role = get_profile_role(profile_name)
+        workspace = get_last_workspace()
+    except Exception as exc:
+        raise ValueError(f"could not resolve profile/workspace: {exc}") from exc
+
+    with _conn(board=board) as conn:
+        result = claim_task_with_binding(
+            conn, task_id, profile_name, role, workspace,
+            create_worktree=create_worktree,
+        )
+        # Merge session_id back from DB into task dict
+        try:
+            row = conn.execute("SELECT session_id, task_size FROM tasks WHERE id = ?",
+                               (task_id,)).fetchone()
+            if row:
+                result["task"]["session_id"] = row["session_id"]
+                result["task"]["task_size"] = row["task_size"]
+        except Exception:
+            pass
+        return result
 
 
 def _task_action_payload(task_id: str, body: dict, action: str, *, board=None):
@@ -1244,6 +1349,8 @@ def handle_kanban_post(handler, parsed, body) -> bool | None:
         board = board_q if board_q is not None else board_b
         if path == "/api/kanban/dispatch":
             return j(handler, _dispatch_payload(parsed)) or True
+        if path == "/api/kanban/claim":
+            return j(handler, _claim_payload(body)) or True
         if path == "/api/kanban/tasks/bulk":
             return j(handler, _bulk_tasks_payload(body, board=board)) or True
         if path == "/api/kanban/tasks":
