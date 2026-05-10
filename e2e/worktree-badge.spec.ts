@@ -62,10 +62,8 @@ async function mockKanbanBoard(
 
 test.describe('US-1: Worktree badge visible on kanban task card', () => {
   test('shows worktree badge with branch name on worktree task', async ({ page }) => {
-    // Navigate first so route interception can take effect
     await page.goto('/');
 
-    // Mock the kanban board API to return a task with workspace_kind="worktree"
     await mockKanbanBoard(page, [
       {
         id: 'wt-001',
@@ -85,21 +83,14 @@ test.describe('US-1: Worktree badge visible on kanban task card', () => {
       },
     ]);
 
-    // Switch to kanban panel
     await switchToKanban(page);
-
-    // Wait for the board to render
     await waitForKanbanBoard(page);
 
-    // Find the worktree task card
     const wtCard = page.locator('.kanban-card[data-kanban-task-id="wt-001"]');
     await expect(wtCard).toBeVisible();
 
-    // Assert: worktree badge is visible inside the card
     const badge = wtCard.locator('[data-testid="worktree-badge"]');
     await expect(badge).toBeVisible();
-
-    // Assert: badge text contains the branch name (last segment of workspace_path)
     await expect(badge).toContainText('wt-feature-x');
   });
 });
@@ -112,7 +103,6 @@ test.describe('US-2: No worktree badge on scratch tasks', () => {
   test('scratch task does not show worktree badge', async ({ page }) => {
     await page.goto('/');
 
-    // Mock the kanban board with a scratch task (default workspace_kind)
     await mockKanbanBoard(page, [
       {
         id: 'scratch-001',
@@ -135,11 +125,9 @@ test.describe('US-2: No worktree badge on scratch tasks', () => {
     await switchToKanban(page);
     await waitForKanbanBoard(page);
 
-    // Find the scratch task card
     const scratchCard = page.locator('.kanban-card[data-kanban-task-id="scratch-001"]');
     await expect(scratchCard).toBeVisible();
 
-    // Assert: no worktree badge exists in the scratch task card
     const badge = scratchCard.locator('[data-testid="worktree-badge"]');
     await expect(badge).toHaveCount(0);
   });
@@ -147,14 +135,12 @@ test.describe('US-2: No worktree badge on scratch tasks', () => {
   test('task without workspace_kind does not show worktree badge', async ({ page }) => {
     await page.goto('/');
 
-    // Mock the kanban board with a task that has no workspace_kind at all
     await mockKanbanBoard(page, [
       {
         id: 'plain-001',
         title: 'Plain task',
         status: 'ready',
         priority: 0,
-        // workspace_kind is undefined/null (not set)
         workspace_path: null,
         assignee: null,
         tenant: null,
@@ -184,7 +170,6 @@ test.describe('US-2: No worktree badge on scratch tasks', () => {
 
 test.describe('US-3: Worktree badge updates when task workspace changes', () => {
   test('badge appears after SSE update changes workspace_kind to worktree', async ({ page }) => {
-    // Start with a scratch task — no worktree badge
     const scratchTask = {
       id: 'dynamic-001',
       title: 'Dynamic task',
@@ -202,7 +187,6 @@ test.describe('US-3: Worktree badge updates when task workspace changes', () => 
       progress: null,
     };
 
-    // The worktree version of the same task
     const worktreeTask = {
       ...scratchTask,
       workspace_kind: 'worktree',
@@ -211,7 +195,6 @@ test.describe('US-3: Worktree badge updates when task workspace changes', () => 
 
     await page.goto('/');
 
-    // Initial mock: scratch task (no badge)
     let currentTasks = [scratchTask];
 
     await page.route('/api/kanban/board', async (route: Route) => {
@@ -238,14 +221,8 @@ test.describe('US-3: Worktree badge updates when task workspace changes', () => 
       });
     });
 
-    // Mock SSE stream — after a delay, deliver an update event and then
-    // return the worktree version on the next board fetch
     await page.route('/api/kanban/events/stream**', async (route: Route) => {
-      // Return an SSE hello frame, then an events frame that triggers board refresh
       const helloFrame = 'event: hello\ndata: {"cursor":0,"board":null}\n\n';
-      // After a short simulated delay, the SSE stream delivers an "updated" event
-      // for the task — this causes the JS to re-fetch /api/kanban/board
-      // which will now return the worktree version.
       const eventFrame =
         'id: 1\n' +
         'event: events\n' +
@@ -261,20 +238,197 @@ test.describe('US-3: Worktree badge updates when task workspace changes', () => 
     await switchToKanban(page);
     await waitForKanbanBoard(page);
 
-    // Initially, no worktree badge
     const card = page.locator('.kanban-card[data-kanban-task-id="dynamic-001"]');
     await expect(card).toBeVisible();
     const badgeBefore = card.locator('[data-testid="worktree-badge"]');
     await expect(badgeBefore).toHaveCount(0);
 
     // Simulate the SSE update: change mock data to worktree version
-    // so the next board fetch returns the worktree badge
     currentTasks = [worktreeTask];
 
-    // The SSE event triggers a board refresh via _scheduleKanbanRefresh.
-    // Wait for the badge to appear (the board re-fetches automatically).
     const badgeAfter = card.locator('[data-testid="worktree-badge"]');
     await expect(badgeAfter).toBeVisible({ timeout: 10000 });
     await expect(badgeAfter).toContainText('wt-dynamic-branch');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// US-4: Create Worktree button in task detail panel
+// ---------------------------------------------------------------------------
+
+test.describe('US-4: Create Worktree button in task detail', () => {
+  test('scratch task detail shows Create Worktree button', async ({ page }) => {
+    await page.goto('/');
+
+    const scratchTask = {
+      id: 'wt-create-001',
+      title: 'Create WT test',
+      status: 'ready',
+      priority: 0,
+      workspace_kind: 'scratch',
+      workspace_path: null,
+      assignee: null,
+      tenant: null,
+      body: null,
+      link_counts: { parents: 0, children: 0 },
+      comment_count: 0,
+      age_seconds: 100,
+      age: '2m',
+      progress: null,
+    };
+
+    await mockKanbanBoard(page, [scratchTask]);
+
+    // Mock task detail API
+    await page.route('/api/kanban/tasks/wt-create-001', async (route: Route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          task: scratchTask,
+          comments: [],
+          events: [],
+          links: { parents: [], children: [] },
+          runs: [],
+          read_only: false,
+        }),
+      });
+    });
+
+    // Mock task log API
+    await page.route('/api/kanban/tasks/wt-create-001/log*', async (route: Route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ task_id: 'wt-create-001', path: '', exists: false, size_bytes: 0, content: '', truncated: false }),
+      });
+    });
+
+    await switchToKanban(page);
+    await waitForKanbanBoard(page);
+
+    // Click on the task card to open detail
+    const card = page.locator('.kanban-card[data-kanban-task-id="wt-create-001"]');
+    await card.click();
+
+    // Wait for task detail to render
+    await page.locator('#kanbanTaskPreview').waitFor({ state: 'visible' });
+
+    // Assert: "Create Worktree" button is visible in the detail
+    const createBtn = page.locator('.kanban-detail-worktree >> button', { hasText: 'Create Worktree' });
+    await expect(createBtn).toBeVisible();
+  });
+
+  test('worktree task detail shows Remove Worktree button and badge', async ({ page }) => {
+    await page.goto('/');
+
+    const worktreeTask = {
+      id: 'wt-remove-001',
+      title: 'Remove WT test',
+      status: 'ready',
+      priority: 0,
+      workspace_kind: 'worktree',
+      workspace_path: '/Users/user/Code/project-wt-remove-branch',
+      assignee: null,
+      tenant: null,
+      body: null,
+      link_counts: { parents: 0, children: 0 },
+      comment_count: 0,
+      age_seconds: 100,
+      age: '2m',
+      progress: null,
+    };
+
+    await mockKanbanBoard(page, [worktreeTask]);
+
+    await page.route('/api/kanban/tasks/wt-remove-001', async (route: Route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          task: worktreeTask,
+          comments: [],
+          events: [],
+          links: { parents: [], children: [] },
+          runs: [],
+          read_only: false,
+        }),
+      });
+    });
+
+    await page.route('/api/kanban/tasks/wt-remove-001/log*', async (route: Route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ task_id: 'wt-remove-001', path: '', exists: false, size_bytes: 0, content: '', truncated: false }),
+      });
+    });
+
+    await switchToKanban(page);
+    await waitForKanbanBoard(page);
+
+    const card = page.locator('.kanban-card[data-kanban-task-id="wt-remove-001"]');
+    await card.click();
+
+    await page.locator('#kanbanTaskPreview').waitFor({ state: 'visible' });
+
+    // Assert: worktree badge in detail panel shows branch name
+    const detailBadge = page.locator('[data-testid="worktree-badge-detail"]');
+    await expect(detailBadge).toBeVisible();
+    await expect(detailBadge).toContainText('wt-remove-branch');
+
+    // Assert: "Remove Worktree" button is visible
+    const removeBtn = page.locator('.kanban-detail-worktree >> button', { hasText: 'Remove Worktree' });
+    await expect(removeBtn).toBeVisible();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// US-5: Workspace selector in task creation modal
+// ---------------------------------------------------------------------------
+
+test.describe('US-5: Workspace selector in task creation modal', () => {
+  test('task creation modal has workspace selector with scratch and worktree options', async ({ page }) => {
+    await page.goto('/');
+    await switchToKanban(page);
+
+    // Click the "+" button to open new task modal
+    const addBtn = page.locator('.kanban-add-btn, [onclick*="openKanbanCreate"], button.kanban-header-add');
+    // Try common selectors for the new task button
+    const newTaskBtn = page.locator('button').filter({ hasText: /New task|✎|\+/ }).first();
+    if (await newTaskBtn.isVisible()) {
+      await newTaskBtn.click();
+    } else {
+      // Fallback: look for kanban modal trigger
+      await page.evaluate(() => { if (typeof openKanbanCreate === 'function') openKanbanCreate(); });
+    }
+
+    // Wait for modal to appear
+    const modal = page.locator('#kanbanTaskModal');
+    await expect(modal).toBeVisible({ timeout: 5000 });
+
+    // Assert: workspace selector exists
+    const wsSelect = page.locator('#kanbanTaskModalWorkspaceKind');
+    await expect(wsSelect).toBeVisible();
+
+    // Assert: default value is "scratch"
+    await expect(wsSelect).toHaveValue('scratch');
+
+    // Assert: worktree option is available
+    const options = wsSelect.locator('option');
+    await expect(options).toHaveCount(2);
+
+    // Switch to worktree — should show sub-fields
+    await wsSelect.selectOption('worktree');
+    const wtFields = page.locator('#kanbanTaskModalWorktreeFields');
+    await expect(wtFields).toBeVisible();
+
+    // Assert: branch name input and create button are visible
+    await expect(page.locator('#kanbanTaskModalWorktreeBranch')).toBeVisible();
+    await expect(page.locator('#kanbanTaskModalWorktreeCreateBtn')).toBeVisible();
+
+    // Switch back to scratch — sub-fields should hide
+    await wsSelect.selectOption('scratch');
+    await expect(page.locator('#kanbanTaskModalWorktreeFields')).toBeHidden();
   });
 });

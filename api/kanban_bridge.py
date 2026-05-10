@@ -364,6 +364,13 @@ def _patch_task(conn, task_id: str, body: dict):
             updates["priority"] = int(body.get("priority") or 0)
         except (TypeError, ValueError):
             raise ValueError("priority must be an integer")
+    if "workspace_kind" in body:
+        wk = body.get("workspace_kind") or "scratch"
+        if wk not in ("scratch", "worktree"):
+            raise ValueError(f"invalid workspace_kind: {wk}")
+        updates["workspace_kind"] = wk
+    if "workspace_path" in body:
+        updates["workspace_path"] = body.get("workspace_path") or None
 
     for field, value in updates.items():
         if hasattr(task, field):

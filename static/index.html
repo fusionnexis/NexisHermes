@@ -1302,6 +1302,18 @@
       <input type="text" id="kanbanTaskModalTenant" list="kanbanTaskModalTenantList" maxlength="64" autocomplete="off" data-i18n-placeholder="kanban_tenant_placeholder" placeholder="Optional — project or team slug">
       <datalist id="kanbanTaskModalTenantList"></datalist>
     </div>
+    <div class="kanban-modal-row">
+      <label for="kanbanTaskModalWorkspaceKind">Workspace</label>
+      <select id="kanbanTaskModalWorkspaceKind" onchange="toggleWorktreeFields()">
+        <option value="scratch">Scratch (shared workspace)</option>
+        <option value="worktree">Worktree (isolated git branch)</option>
+      </select>
+      <div id="kanbanTaskModalWorktreeFields" hidden>
+        <input type="text" id="kanbanTaskModalWorktreeBranch" maxlength="128" autocomplete="off" placeholder="Branch name (auto-generated if empty)">
+        <button type="button" class="btn secondary" onclick="createWorktreeFromModal()">Create Worktree</button>
+        <div id="kanbanTaskModalWorktreeResult"></div>
+      </div>
+    </div>
     <div class="kanban-modal-error" id="kanbanTaskModalError" aria-live="polite"></div>
     <div class="kanban-modal-actions">
       <button type="button" class="btn secondary" onclick="closeKanbanTaskModal()" data-i18n="cancel">Cancel</button>

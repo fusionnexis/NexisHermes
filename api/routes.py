@@ -3394,15 +3394,20 @@ def handle_get(handler, parsed) -> bool:
     # ── Worktree list (GET) ──
     if parsed.path == "/api/worktree/list":
         qs = parse_qs(parsed.query)
-        sid = qs.get("session_id", [""])[0]
-        if not sid:
-            return bad(handler, "session_id required")
-        try:
-            s = get_session(sid)
-        except KeyError:
-            return bad(handler, "Session not found", 404)
         from api.worktree import list_worktrees as _wt_list, _is_git_repo, _git_available
-        workspace = Path(s.workspace)
+        workspace = None
+        ws_param = qs.get("workspace", [""])[0]
+        sid = qs.get("session_id", [""])[0]
+        if ws_param:
+            workspace = Path(ws_param)
+        elif sid:
+            try:
+                s = get_session(sid)
+            except KeyError:
+                return bad(handler, "Session not found", 404)
+            workspace = Path(s.workspace)
+        else:
+            return bad(handler, "session_id or workspace required")
         if not _git_available(workspace):
             return j(handler, {"error": "git not available"}, status=503)
         if not _is_git_repo(workspace):
@@ -4433,15 +4438,20 @@ def handle_post(handler, parsed) -> bool:
 
     # ── Worktree management (POST) ──
     if parsed.path == "/api/worktree/create":
-        session_id = str(body.get("session_id", "")).strip()
-        if not session_id:
-            return bad(handler, "session_id required")
-        try:
-            s = get_session(session_id)
-        except KeyError:
-            return bad(handler, "Session not found", 404)
         from api.worktree import create_worktree as _wt_create, _is_git_repo, _git_available
-        workspace = Path(s.workspace)
+        workspace = None
+        ws_param = str(body.get("workspace", "")).strip()
+        session_id = str(body.get("session_id", "")).strip()
+        if ws_param:
+            workspace = Path(ws_param)
+        elif session_id:
+            try:
+                s = get_session(session_id)
+            except KeyError:
+                return bad(handler, "Session not found", 404)
+            workspace = Path(s.workspace)
+        else:
+            return bad(handler, "session_id or workspace required")
         if not _git_available(workspace):
             return j(handler, {"error": "git not available"}, status=503)
         if not _is_git_repo(workspace):
@@ -4459,15 +4469,20 @@ def handle_post(handler, parsed) -> bool:
         worktree_id = str(body.get("worktree_id", "")).strip()
         if not worktree_id:
             return bad(handler, "worktree_id required")
-        session_id = str(body.get("session_id", "")).strip()
-        if not session_id:
-            return bad(handler, "session_id required")
-        try:
-            s = get_session(session_id)
-        except KeyError:
-            return bad(handler, "Session not found", 404)
         from api.worktree import remove_worktree as _wt_remove, _is_git_repo, _git_available
-        workspace = Path(s.workspace)
+        workspace = None
+        ws_param = str(body.get("workspace", "")).strip()
+        session_id = str(body.get("session_id", "")).strip()
+        if ws_param:
+            workspace = Path(ws_param)
+        elif session_id:
+            try:
+                s = get_session(session_id)
+            except KeyError:
+                return bad(handler, "Session not found", 404)
+            workspace = Path(s.workspace)
+        else:
+            return bad(handler, "session_id or workspace required")
         if not _git_available(workspace):
             return j(handler, {"error": "git not available"}, status=503)
         if not _is_git_repo(workspace):

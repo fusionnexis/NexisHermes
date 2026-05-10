@@ -1964,6 +1964,15 @@ async function submitKanbanTaskModal(){
       if (!Number.isNaN(n)) payload.priority = n;
     }
   }
+  // Worktree workspace binding: if the user selected "worktree" as workspace
+  // kind and created a worktree, include workspace_kind and workspace_path.
+  const wkEl = document.getElementById('kanbanTaskModalWorkspaceKind');
+  const workspaceKind = wkEl ? wkEl.value : 'scratch';
+  if (workspaceKind === 'worktree') {
+    const wtResult = document.getElementById('kanbanTaskModalWorktreeResult');
+    payload.workspace_kind = 'worktree';
+    payload.workspace_path = wtResult ? wtResult.dataset.path : '';
+  }
   // Soft warning: a Ready task with the explicit "Unassigned" option will sit
   // forever because the dispatcher skips unassigned rows (kanban_db.py:3567).
   // The dropdown now makes this an explicit choice (the user picked "—
@@ -2052,6 +2061,10 @@ function _kanbanRenderTaskDetail(data){
   const statusButtons = ['triage', 'todo', 'ready', 'blocked', 'done', 'archived'].map(status =>
     `<button class="btn secondary" onclick="updateKanbanTask('${esc(task.id)}',{status:'${status}'})">${esc(_kanbanColumnLabel(status))}</button>`
   ).join('') + `<button class="btn secondary" onclick="blockKanbanTask('${esc(task.id)}')">${esc(t('kanban_block'))}</button><button class="btn secondary" onclick="unblockKanbanTask('${esc(task.id)}')">${esc(t('kanban_unblock'))}</button>`;
+  // Worktree section: show status + create/remove actions
+  const wtSection = task.workspace_kind === 'worktree' && task.workspace_path
+    ? `<div class="kanban-detail-worktree"><span class="kanban-badge worktree" data-testid="worktree-badge-detail">🌳 ${esc(task.workspace_path.split('/').pop())}</span><span class="kanban-detail-worktree-path">${esc(task.workspace_path)}</span><button class="btn secondary" onclick="removeWorktreeFromTask('${esc(task.id)}')">Remove Worktree</button></div>`
+    : `<div class="kanban-detail-worktree"><button class="btn secondary" onclick="createWorktreeForTask('${esc(task.id)}')">Create Worktree</button></div>`;
   return `<div class="kanban-task-preview-header">
       <button class="btn secondary kanban-back-btn" onclick="closeKanbanTaskDetail()">${esc(t('kanban_back_to_board'))}</button>
       <div class="kanban-task-preview-title">${esc(title)}</div>
@@ -2060,6 +2073,7 @@ function _kanbanRenderTaskDetail(data){
     <div class="kanban-task-preview-body">${esc(body)}</div>
     ${meta.length ? `<div class="kanban-meta">${esc(meta.join(' · '))}</div>` : ''}
     <div class="kanban-status-actions">${statusButtons}</div>
+    ${wtSection}
     <div class="kanban-detail-grid">
       ${_kanbanDetailSection('kanban-detail-comments', String(t('kanban_comments_count')).replace('{0}', comments.length), comments.map(_kanbanCommentHtml).join(''), 'kanban_no_comments')}
       ${_kanbanDetailSection('kanban-detail-events', String(t('kanban_events_count')).replace('{0}', events.length), events.map(_kanbanEventHtml).join(''), 'kanban_no_events')}
@@ -2071,6 +2085,87 @@ function _kanbanRenderTaskDetail(data){
       <textarea id="kanbanCommentInput" rows="2" placeholder="${esc(t('kanban_add_comment'))}"></textarea>
       <button class="btn primary" onclick="addKanbanComment('${esc(task.id)}')">${esc(t('kanban_add_comment'))}</button>
     </div>`;
+}
+
+// ── Worktree management helpers ──────────────────────────────────────────────
+
+function toggleWorktreeFields(){
+  const sel = document.getElementById('kanbanTaskModalWorkspaceKind');
+  const fields = document.getElementById('kanbanTaskModalWorktreeFields');
+  if (fields && sel) fields.hidden = sel.value !== 'worktree';
+}
+
+function _worktreeWorkspace(){
+  // Resolve workspace path: prefer session workspace, fall back to last workspace
+  if (S.session && S.session.workspace) return S.session.workspace;
+  try { return document.querySelector('#workspaceSelect')?.value || ''; } catch(e) { return ''; }
+}
+
+async function createWorktreeFromModal(){
+  const workspace = _worktreeWorkspace();
+  if (!workspace) { showToast('No workspace available — cannot create worktree', 'error'); return; }
+  const branchInput = document.getElementById('kanbanTaskModalWorktreeBranch');
+  const resultEl = document.getElementById('kanbanTaskModalWorktreeResult');
+  const btn = document.getElementById('kanbanTaskModalWorktreeCreateBtn');
+  if (btn) btn.disabled = true;
+  try {
+    const body = {workspace: workspace};
+    if (S.session && S.session.session_id) body.session_id = S.session.session_id;
+    if (branchInput && branchInput.value.trim()) body.branch_name = branchInput.value.trim();
+    const wt = await api('/api/worktree/create', {method: 'POST', body: JSON.stringify(body)});
+    if (wt.error) {
+      if (resultEl) resultEl.textContent = wt.error;
+      if (btn) btn.disabled = false;
+      return;
+    }
+    if (resultEl) {
+      resultEl.textContent = `Created: ${wt.branch} → ${wt.path}`;
+      resultEl.dataset.path = wt.path;
+    }
+  } catch(e) {
+    if (resultEl) resultEl.textContent = e.message || String(e);
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function createWorktreeForTask(taskId){
+  const workspace = _worktreeWorkspace();
+  if (!workspace) { showToast('No workspace available — cannot create worktree', 'error'); return; }
+  try {
+    const body = {workspace: workspace, branch_name: `task-${taskId}`};
+    if (S.session && S.session.session_id) body.session_id = S.session.session_id;
+    const wt = await api('/api/worktree/create', {method: 'POST', body: JSON.stringify(body)});
+    if (wt.error) { showToast('Worktree error: ' + wt.error, 'error'); return; }
+    // Bind the worktree to the task
+    await updateKanbanTask(taskId, {
+      workspace_kind: 'worktree',
+      workspace_path: wt.path,
+    });
+    showToast(`Worktree created: ${wt.branch}`);
+  } catch(e) {
+    showToast('Worktree error: ' + (e.message || e), 'error');
+  }
+}
+
+async function removeWorktreeFromTask(taskId){
+  // Get the task to find its workspace and worktree branch name
+  try {
+    const data = await api('/api/kanban/tasks/' + encodeURIComponent(taskId) + _kanbanBoardQuery());
+    const task = data.task || {};
+    const worktreeId = task.workspace_path ? task.workspace_path.split('/').pop() : '';
+    if (!worktreeId) { showToast('No worktree to remove', 'error'); return; }
+    // Derive the main workspace from the worktree path (strip "-<branch>" suffix)
+    const workspace = task.workspace_path.replace(/-[^/]+$/, '');
+    const body = {worktree_id: worktreeId, workspace: workspace};
+    if (S.session && S.session.session_id) body.session_id = S.session.session_id;
+    const result = await api('/api/worktree/remove', {method: 'POST', body: JSON.stringify(body)});
+    if (result.error) { showToast('Remove error: ' + result.error, 'error'); return; }
+    // Unbind the task from the worktree
+    await updateKanbanTask(taskId, {workspace_kind: 'scratch', workspace_path: null});
+    showToast('Worktree removed');
+  } catch(e) {
+    showToast('Remove error: ' + (e.message || e), 'error');
+  }
 }
 
 async function loadKanbanTask(taskId){
