@@ -3649,10 +3649,13 @@ main.main.showing-insights > #mainInsights{display:flex;overflow-y:auto;}
 .kanban-badge.priority{color:var(--accent)}
 .kanban-badge.tenant{color:var(--text)}
 .kanban-badge.worktree{color:#4ade80;border-color:#4ade80}
+.kanban-badge.size{color:var(--text);background:var(--input-bg);border-color:var(--border);font-weight:600}
+.role-badge{border:1px solid var(--border);border-radius:999px;padding:1px 6px;font-size:10px;font-weight:600;margin-left:4px;vertical-align:middle}
 .kanban-detail-worktree{display:flex;align-items:center;gap:8px;margin:8px 0;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg)}
 .kanban-detail-worktree-path{font-size:10px;color:var(--muted)}
 .kanban-detail-worktree .btn{font-size:11px;padding:4px 8px}
 #kanbanTaskModalWorktreeFields{margin-top:6px;display:flex;flex-direction:column;gap:6px}
+#kanbanTaskModalWorktreeFields[hidden]{display:none}
 #kanbanTaskModalWorktreeResult{font-size:12px;color:var(--muted)}
 .kanban-card-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:6px}
 .kanban-card-assignee{color:var(--accent)}

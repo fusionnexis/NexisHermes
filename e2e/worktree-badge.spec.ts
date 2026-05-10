@@ -6,7 +6,7 @@ import { test, expect, type Page, type Route } from '@playwright/test';
 
 /** Switch to the Kanban panel via the sidebar rail. */
 async function switchToKanban(page: Page) {
-  await page.locator('button[data-panel="kanban"]').click();
+  await page.locator('button[data-panel="kanban"]').first().click();
 }
 
 /** Wait for the kanban board to render at least one card. */

@@ -1202,8 +1202,12 @@ function _kanbanCard(task, status){
   const wtBadge = (task.workspace_kind === 'worktree' && task.workspace_path)
     ? (() => { const branch = task.workspace_path.split('/').pop(); return `<span class="kanban-badge worktree" data-testid="worktree-badge">🌳 ${esc(branch)}</span>`; })()
     : '';
+  // Size badge: show S/M/L when task_size is set
+  const sizeBadge = task.task_size
+    ? `<span class="kanban-badge size" data-testid="size-badge">${esc({small:'S',medium:'M',large:'L'}[task.task_size]||task.task_size)}</span>`
+    : '';
   return `<article class="kanban-card ${esc(stale)}" data-kanban-task-id="${esc(task.id)}" draggable="true" ondragstart="dragKanbanTask(event, '${esc(task.id)}')" onclick="loadKanbanTask('${esc(task.id)}')" tabindex="0" role="button" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();loadKanbanTask('${esc(task.id)}')}">
-    <div class="kanban-card-topline"><span class="kanban-card-id">${esc(task.id || '')}</span>${priority ? `<span class="kanban-badge priority">P${priority}</span>` : ''}${task.tenant ? `<span class="kanban-badge tenant">${esc(task.tenant)}</span>` : ''}${wtBadge}</div>
+    <div class="kanban-card-topline"><span class="kanban-card-id">${esc(task.id || '')}</span>${priority ? `<span class="kanban-badge priority">P${priority}</span>` : ''}${task.tenant ? `<span class="kanban-badge tenant">${esc(task.tenant)}</span>` : ''}${wtBadge}${sizeBadge}</div>
     <div class="kanban-card-title">${esc(_kanbanTaskTitle(task))}</div>
     ${body ? `<div class="kanban-card-body">${_kanbanRenderMarkdown(body)}</div>` : ''}
     <div class="kanban-card-meta">${assignee}${comments ? `<span class="kanban-card-metric">💬 ${comments}</span>` : ''}${linkTotal ? `<span class="kanban-card-metric">↔ ${linkTotal}</span>` : ''}${age ? `<span class="kanban-card-age">${esc(age)}</span>` : ''}</div>
@@ -1865,6 +1869,7 @@ function _kanbanResetTaskModalFields(values){
   // .value before the options exist would silently fail.
   set('kanbanTaskModalTenant', v.tenant || '');
   set('kanbanTaskModalPriority', v.priority != null ? v.priority : 0);
+  set('kanbanTaskModalSize', v.task_size || '');
   const errEl = document.getElementById('kanbanTaskModalError');
   if (errEl) { errEl.textContent = ''; delete errEl.dataset.warningShown; }
   const submitBtn = document.getElementById('kanbanTaskModalSubmit');
@@ -1973,6 +1978,10 @@ async function submitKanbanTaskModal(){
     payload.workspace_kind = 'worktree';
     payload.workspace_path = wtResult ? wtResult.dataset.path : '';
   }
+  // task_size
+  const sizeEl = document.getElementById('kanbanTaskModalSize');
+  const sizeVal = sizeEl ? sizeEl.value.trim() : '';
+  if (sizeVal) payload.task_size = sizeVal;
   // Soft warning: a Ready task with the explicit "Unassigned" option will sit
   // forever because the dispatcher skips unassigned rows (kanban_db.py:3567).
   // The dropdown now makes this an explicit choice (the user picked "—
@@ -4168,10 +4177,14 @@ async function loadProfilesPanel() {
       const isActive = p.name === activeName;
       const activeBadge = isActive ? `<span style="color:var(--link);font-size:10px;font-weight:600;margin-left:6px">${esc(t('profile_active'))}</span>` : '';
       const defaultBadge = p.is_default ? ` <span style="opacity:.5">${esc(t('profile_default_label'))}</span>` : '';
+      const _roleBadgeColors = {qa:'#4ade80', planner:'#a78bfa', reviewer:'#fb923c'};
+      const roleBadge = (p.role && p.role !== 'coder')
+        ? `<span class="role-badge" style="color:${_roleBadgeColors[p.role]||'var(--muted)'};border-color:${_roleBadgeColors[p.role]||'var(--border)'};">${esc(p.role)}</span>`
+        : '';
       card.innerHTML = `
         <div class="profile-card-header">
           <div style="min-width:0;flex:1">
-            <div class="profile-card-name${isActive ? ' is-active' : ''}">${gwDot}${esc(p.name)}${defaultBadge}${activeBadge}</div>
+            <div class="profile-card-name${isActive ? ' is-active' : ''}">${gwDot}${esc(p.name)}${defaultBadge}${activeBadge}${roleBadge}</div>
             ${meta.length ? `<div class="profile-card-meta">${esc(meta.join(' \u00b7 '))}</div>` : `<div class="profile-card-meta">${esc(t('profile_no_configuration'))}</div>`}
           </div>
         </div>`;

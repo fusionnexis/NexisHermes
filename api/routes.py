@@ -3800,6 +3800,16 @@ def handle_post(handler, parsed) -> bool:
             profile=body.get("profile") or None,
             project_id=body.get("project_id") or None,
         )
+        # Derive role: explicit body.role > profile config.yaml role > 'coder'
+        _VALID_ROLES = frozenset({'coder', 'qa', 'planner', 'reviewer'})
+        role_req = str(body.get("role") or '').strip().lower()
+        if role_req:
+            if role_req not in _VALID_ROLES:
+                return bad(handler, f"invalid role: {role_req!r}. Must be one of: {sorted(_VALID_ROLES)}")
+            s.role = role_req
+        else:
+            from api.profiles import get_profile_role
+            s.role = get_profile_role(s.profile)
         return j(handler, {"session": s.compact() | {"messages": s.messages}})
 
     if parsed.path == "/api/session/duplicate":

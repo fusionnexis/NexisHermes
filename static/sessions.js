@@ -2570,6 +2570,16 @@ function renderSessionListFromCache(){
     ts.className='session-time'+(hasAttentionState?' is-hidden':'');
     ts.textContent=hasAttentionState?'':_formatRelativeSessionTime(tsMs);
     titleRow.appendChild(title);
+    // Role badge: show when session has a non-coder role
+    const _roleBadgeColors = {qa:'#4ade80', planner:'#a78bfa', reviewer:'#fb923c'};
+    if (s.role && s.role !== 'coder' && _roleBadgeColors[s.role]) {
+      const roleBadge = document.createElement('span');
+      roleBadge.className = 'role-badge';
+      roleBadge.style.color = _roleBadgeColors[s.role];
+      roleBadge.style.borderColor = _roleBadgeColors[s.role];
+      roleBadge.textContent = s.role;
+      titleRow.appendChild(roleBadge);
+    }
     // Project color dot: placed BETWEEN title and timestamp, not inside the
     // title span. Inside the title span it would be clipped by the ellipsis
     // truncation, becoming invisible exactly when the title is long enough

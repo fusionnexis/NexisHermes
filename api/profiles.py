@@ -254,6 +254,30 @@ def get_active_hermes_home() -> Path:
     return _resolve_profile_home_for_name(get_active_profile_name())
 
 
+_VALID_ROLES = frozenset({'coder', 'qa', 'planner', 'reviewer'})
+
+
+def get_profile_role(profile_name: str | None = None) -> str:
+    """Return the role configured for the given profile, defaulting to 'coder'.
+
+    Reads the `role` key from the profile's config.yaml. Falls back to
+    'coder' when the key is absent or the profile has no config.yaml.
+    """
+    if not profile_name:
+        profile_name = get_active_profile_name()
+    try:
+        home = _resolve_profile_home_for_name(profile_name)
+        cfg_path = home / 'config.yaml'
+        if not cfg_path.exists():
+            return 'coder'
+        import yaml as _yaml
+        cfg = _yaml.safe_load(cfg_path.read_text(encoding='utf-8')) or {}
+        role = str(cfg.get('role', 'coder')).strip().lower()
+        return role if role in _VALID_ROLES else 'coder'
+    except Exception:
+        return 'coder'
+
+
 
 # ── Cron-call profile isolation (issue: Scheduled jobs ignored active profile) ─
 # `cron.jobs` reads HERMES_HOME from os.environ (process-global) at function-
@@ -845,6 +869,7 @@ def list_profiles_api() -> list:
             'provider': p.provider,
             'has_env': p.has_env,
             'skill_count': p.skill_count,
+            'role': get_profile_role(p.name),
         })
     return result
 

@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, unquote
 
 from api.helpers import bad, j
 
-BOARD_COLUMNS = ["triage", "todo", "ready", "running", "blocked", "done"]
+BOARD_COLUMNS = ["triage", "todo", "ready", "running", "in_review", "qa_verify", "blocked", "release_ready", "done"]
 _TASK_PREFIX = "/api/kanban/tasks/"
 
 
@@ -80,7 +80,19 @@ def _normalise_board_or_raise(raw):
 def _conn(board=None):
     kb = _kb()
     kb.init_db(board=board)
-    return kb.connect(board=board)
+    conn = kb.connect(board=board)
+    _ensure_task_size_column(conn)
+    return conn
+
+
+def _ensure_task_size_column(conn) -> None:
+    """Add task_size column to tasks table if it doesn't exist yet."""
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+        if "task_size" not in cols:
+            conn.execute("ALTER TABLE tasks ADD COLUMN task_size TEXT")
+    except Exception:
+        pass
 
 
 def _obj_dict(value):
@@ -104,6 +116,9 @@ def _task_dict(task):
     data["age_seconds"] = age
     data["age"] = age
     data.setdefault("progress", None)
+    # task_size may not be in the ORM object if hermes_cli predates this column;
+    # it should be present after _ensure_task_size_column runs, but default to None.
+    data.setdefault("task_size", None)
     return data
 
 
@@ -237,6 +252,15 @@ def _validate_status(status: str) -> str:
     return value
 
 
+# Status transition rules: maps a target status to the set of statuses it
+# may only be reached FROM. None means no restriction.
+_STATUS_TRANSITION_RULES: dict[str, frozenset] = {
+    "in_review":      frozenset({"running"}),
+    "qa_verify":      frozenset({"in_review"}),
+    "release_ready":  frozenset({"qa_verify"}),
+}
+
+
 def _set_status_direct(conn, task_id: str, new_status: str) -> bool:
     """Direct status write for drag-drop moves not covered by structured verbs.
 
@@ -319,6 +343,9 @@ def _create_task_payload(body: dict, *, board=None):
         from pathlib import Path
         if not Path(workspace_path).exists():
             raise ValueError(f"worktree path does not exist: {workspace_path}")
+    task_size = body.get("task_size") or None
+    if task_size is not None and task_size not in ("small", "medium", "large"):
+        raise ValueError(f"invalid task_size: {task_size!r}. Must be small, medium, large, or null")
     kb = _kb()
     requested_status = body.get("status")
     with _conn(board=board) as conn:
@@ -340,7 +367,22 @@ def _create_task_payload(body: dict, *, board=None):
         )
         if requested_status:
             _patch_task(conn, task_id, {"status": requested_status})
-        return {"task": _task_dict(kb.get_task(conn, task_id)), "read_only": False}
+        # task_size: write via direct SQL since hermes_cli kanban_db may not
+        # support this column in its create_task() API.
+        if task_size is not None:
+            try:
+                conn.execute("UPDATE tasks SET task_size = ? WHERE id = ?", (task_size, task_id))
+            except Exception:
+                pass
+        task_data = _task_dict(kb.get_task(conn, task_id))
+        # Merge task_size from DB (not from ORM object which may lack the attr)
+        try:
+            row = conn.execute("SELECT task_size FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if row is not None:
+                task_data["task_size"] = row["task_size"]
+        except Exception:
+            pass
+        return {"task": task_data, "read_only": False}
 
 
 def _patch_task(conn, task_id: str, body: dict):
@@ -371,6 +413,11 @@ def _patch_task(conn, task_id: str, body: dict):
         updates["workspace_kind"] = wk
     if "workspace_path" in body:
         updates["workspace_path"] = body.get("workspace_path") or None
+    if "task_size" in body:
+        ts = body.get("task_size")
+        if ts is not None and ts not in ("small", "medium", "large"):
+            raise ValueError(f"invalid task_size: {ts!r}. Must be small, medium, large, or null")
+        updates["task_size"] = ts
 
     for field, value in updates.items():
         if hasattr(task, field):
@@ -391,6 +438,17 @@ def _patch_task(conn, task_id: str, body: dict):
     if "status" not in body or body.get("status") in (None, ""):
         return
     status = _validate_status(body.get("status"))
+    # Enforce transition rules for pipeline-gated statuses
+    if status in _STATUS_TRANSITION_RULES:
+        allowed_from = _STATUS_TRANSITION_RULES[status]
+        current_task = kb.get_task(conn, task_id)
+        if not current_task:
+            raise LookupError("task not found")
+        if current_task.status not in allowed_from:
+            raise ValueError(
+                f"invalid transition: {current_task.status!r} → {status!r}. "
+                f"'{status}' can only be entered from: {sorted(allowed_from)}"
+            )
     if status == "done":
         if not kb.complete_task(conn, task_id, result=body.get("result"), summary=body.get("summary")):
             raise LookupError("task not found")
@@ -434,6 +492,10 @@ def _patch_task(conn, task_id: str, body: dict):
         # and ends any active run with outcome='reclaimed'.
         if not _set_status_direct(conn, task_id, status):
             raise LookupError("task not found")
+    elif status in ("in_review", "qa_verify", "release_ready"):
+        # Pipeline-gated statuses: transition validation already passed above.
+        if not _set_status_direct(conn, task_id, status):
+            raise LookupError("task not found")
     else:
         # _validate_status guarantees we never reach here, but be defensive.
         raise ValueError(f"unknown status: {status}")
@@ -446,7 +508,15 @@ def _patch_task_payload(task_id: str, body: dict, *, board=None):
     kb = _kb()
     with _conn(board=board) as conn:
         _patch_task(conn, task_id, body)
-        return {"task": _task_dict(kb.get_task(conn, task_id)), "read_only": False}
+        task_data = _task_dict(kb.get_task(conn, task_id))
+        # Merge task_size from DB directly (ORM object may not carry it)
+        try:
+            row = conn.execute("SELECT task_size FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if row is not None:
+                task_data["task_size"] = row["task_size"]
+        except Exception:
+            pass
+        return {"task": task_data, "read_only": False}
 
 
 def _comment_payload(task_id: str, body: dict, *, board=None):

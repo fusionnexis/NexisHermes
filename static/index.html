@@ -1303,6 +1303,15 @@
       <datalist id="kanbanTaskModalTenantList"></datalist>
     </div>
     <div class="kanban-modal-row">
+      <label for="kanbanTaskModalSize">Size</label>
+      <select id="kanbanTaskModalSize">
+        <option value="">— None —</option>
+        <option value="small">Small</option>
+        <option value="medium">Medium</option>
+        <option value="large">Large</option>
+      </select>
+    </div>
+    <div class="kanban-modal-row">
       <label for="kanbanTaskModalWorkspaceKind">Workspace</label>
       <select id="kanbanTaskModalWorkspaceKind" onchange="toggleWorktreeFields()">
         <option value="scratch">Scratch (shared workspace)</option>
@@ -1310,7 +1319,7 @@
       </select>
       <div id="kanbanTaskModalWorktreeFields" hidden>
         <input type="text" id="kanbanTaskModalWorktreeBranch" maxlength="128" autocomplete="off" placeholder="Branch name (auto-generated if empty)">
-        <button type="button" class="btn secondary" onclick="createWorktreeFromModal()">Create Worktree</button>
+        <button type="button" class="btn secondary" id="kanbanTaskModalWorktreeCreateBtn" onclick="createWorktreeFromModal()">Create Worktree</button>
         <div id="kanbanTaskModalWorktreeResult"></div>
       </div>
     </div>

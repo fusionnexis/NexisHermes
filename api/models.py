@@ -314,6 +314,8 @@ def _lookup_index_message_count(session_id):
 
 
 class Session:
+    _VALID_ROLES = frozenset({'coder', 'qa', 'planner', 'reviewer'})
+
     def __init__(self, session_id: str=None, title: str='Untitled',
                  workspace=str(DEFAULT_WORKSPACE), model=DEFAULT_MODEL,
                  model_provider=None,
@@ -336,6 +338,7 @@ class Session:
                 parent_session_id: str=None,
                 enabled_toolsets=None,
                 composer_draft=None,
+                role: str=None,
                 **kwargs):
         self.session_id = session_id or uuid.uuid4().hex[:12]
         self.title = title
@@ -375,6 +378,8 @@ class Session:
         self.source_label = kwargs.get('source_label')
         self.enabled_toolsets = enabled_toolsets  # List[str] or None — per-session toolset override
         self.composer_draft = composer_draft if isinstance(composer_draft, dict) else {}
+        _role = str(role or 'coder').strip().lower()
+        self.role = _role if _role in self._VALID_ROLES else 'coder'
         self._metadata_message_count = None
 
     @property
@@ -577,6 +582,7 @@ class Session:
             'last_prompt_tokens': self.last_prompt_tokens,
             'gateway_routing': self.gateway_routing,
             'gateway_routing_history': self.gateway_routing_history,
+            'role': self.role,
             # Only emit 'parent_session_id' when set (the /branch fork link, #1342).
             # Sessions without a fork must not leak None — see test_session_lineage_metadata_api.
             **({'parent_session_id': self.parent_session_id} if self.parent_session_id else {}),
