@@ -1,8 +1,8 @@
 schema: spec-driven
 
 context: |
-  Language: Chinese
-  All artifacts / specs must be written in Chinese
+  Language: Chinese (openspec artifacts/proposals for external sharing)
+  Discussion language: English (internal planning, code comments, commit messages)
 
   Tech stack: Python stdlib (http.server, ThreadingHTTPServer), vanilla JS (no bundler), pyyaml
   Project layout: api/ (backend), static/ (frontend), server.py (entry), tests/ (pytest)
