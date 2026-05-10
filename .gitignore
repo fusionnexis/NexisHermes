@@ -36,6 +36,9 @@ api/_version.py
 .DS_Store
 Thumbs.db
 
+# Node.js dependencies (regeneratable)
+node_modules/
+
 # Local reference clones — never committed (except tracked design/UI-UX reference pages)
 docs/*
 !docs/ui-ux/

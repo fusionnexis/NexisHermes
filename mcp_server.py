@@ -448,6 +448,73 @@ async def handle_move_session(arguments: dict) -> list[TextContent]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  Worktree tool handlers
+# ═══════════════════════════════════════════════════════════════════════════
+
+async def handle_worktree_create(arguments: dict) -> list[TextContent]:
+    """Create a git worktree via the WebUI API (profile-scoped)."""
+    session_id = arguments.get("session_id")
+    if not session_id:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": "session_id is required"}, ensure_ascii=False))]
+    body = {"session_id": session_id}
+    if arguments.get("branch_name"):
+        body["branch_name"] = arguments["branch_name"]
+    if arguments.get("base_ref"):
+        body["base_ref"] = arguments["base_ref"]
+    result = _api_post("/api/worktree/create", body)
+    return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+
+
+async def handle_worktree_list(arguments: dict) -> list[TextContent]:
+    """List git worktrees for a session's workspace (filesystem read)."""
+    session_id = arguments.get("session_id")
+    if not session_id:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": "session_id is required"}, ensure_ascii=False))]
+    # Read workspace path from session index, then list worktrees directly
+    from api.models import get_session
+    from api.workspace import resolve_trusted_workspace
+    from api.worktree import list_worktrees, _is_git_repo, _git_available
+    active = _active_profile()
+    try:
+        s = get_session(session_id)
+    except KeyError:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": "Session not found"}, ensure_ascii=False))]
+    workspace = resolve_trusted_workspace(getattr(s, "workspace", "") or "")
+    if not _git_available(workspace):
+        return [TextContent(type="text", text=json.dumps(
+            {"error": "git not available"}, ensure_ascii=False))]
+    if not _is_git_repo(workspace):
+        return [TextContent(type="text", text=json.dumps(
+            {"error": "workspace is not a git repo"}, ensure_ascii=False))]
+    result = list_worktrees(workspace)
+    if result is None:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": "failed to list worktrees"}, ensure_ascii=False))]
+    return [TextContent(type="text", text=json.dumps(
+        {"worktrees": result}, ensure_ascii=False, indent=2))]
+
+
+async def handle_worktree_remove(arguments: dict) -> list[TextContent]:
+    """Remove a git worktree via the WebUI API (profile-scoped)."""
+    worktree_id = arguments.get("worktree_id")
+    session_id = arguments.get("session_id")
+    if not worktree_id:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": "worktree_id is required"}, ensure_ascii=False))]
+    if not session_id:
+        return [TextContent(type="text", text=json.dumps(
+            {"error": "session_id is required"}, ensure_ascii=False))]
+    result = _api_post("/api/worktree/remove", {
+        "worktree_id": worktree_id,
+        "session_id": session_id,
+    })
+    return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  MCP Server wiring
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -530,6 +597,42 @@ TOOLS = [
             "required": [],
         },
     ),
+    Tool(
+        name="worktree_create",
+        description="Create an isolated git worktree for a session's workspace. Returns worktree_id, path, and branch name.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "Session ID whose workspace to create worktree in"},
+                "branch_name": {"type": "string", "description": "Optional branch name (auto-generated if omitted)"},
+                "base_ref": {"type": "string", "description": "Optional base ref (defaults to HEAD)"},
+            },
+            "required": ["session_id"],
+        },
+    ),
+    Tool(
+        name="worktree_list",
+        description="List all git worktrees for a session's workspace. Returns array of worktree objects with id, path, branch, and lock status.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "Session ID whose workspace to list worktrees for"},
+            },
+            "required": ["session_id"],
+        },
+    ),
+    Tool(
+        name="worktree_remove",
+        description="Remove a git worktree and its associated branch. Returns removed status.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "worktree_id": {"type": "string", "description": "Worktree ID (branch name) to remove"},
+                "session_id": {"type": "string", "description": "Session ID whose workspace owns the worktree"},
+            },
+            "required": ["worktree_id", "session_id"],
+        },
+    ),
 ]
 
 HANDLERS = {
@@ -540,6 +643,9 @@ HANDLERS = {
     "rename_session": handle_rename_session,
     "move_session": handle_move_session,
     "list_sessions": handle_list_sessions,
+    "worktree_create": handle_worktree_create,
+    "worktree_list": handle_worktree_list,
+    "worktree_remove": handle_worktree_remove,
 }
 
 

@@ -311,6 +311,14 @@ def _create_task_payload(body: dict, *, board=None):
         priority = int(body.get("priority") or 0)
     except (TypeError, ValueError):
         raise ValueError("priority must be an integer")
+    workspace_kind = body.get("workspace_kind") or "scratch"
+    workspace_path = body.get("workspace_path") or None
+    if workspace_kind == "worktree":
+        if not workspace_path:
+            raise ValueError("workspace_path is required when workspace_kind is 'worktree'")
+        from pathlib import Path
+        if not Path(workspace_path).exists():
+            raise ValueError(f"worktree path does not exist: {workspace_path}")
     kb = _kb()
     requested_status = body.get("status")
     with _conn(board=board) as conn:
@@ -324,8 +332,8 @@ def _create_task_payload(body: dict, *, board=None):
             priority=priority,
             parents=body.get("parents") or (),
             triage=bool(body.get("triage") or False),
-            workspace_kind=body.get("workspace_kind") or "scratch",
-            workspace_path=body.get("workspace_path") or None,
+            workspace_kind=workspace_kind,
+            workspace_path=workspace_path,
             idempotency_key=body.get("idempotency_key") or None,
             max_runtime_seconds=body.get("max_runtime_seconds") or None,
             skills=body.get("skills") or None,
