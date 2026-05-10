@@ -1,0 +1,59 @@
+schema: spec-driven
+
+context: |
+  Language: English
+  All artifacts / specs must be written in English
+
+  Tech stack: Python stdlib (http.server, ThreadingHTTPServer), vanilla JS (no bundler), pyyaml
+  Project layout: api/ (backend), static/ (frontend), server.py (entry), tests/ (pytest)
+  Ports: backend=8787 (default)
+  Python env: agent venv at <agent-dir>/venv/bin/python
+  Domain: Hermes Agent Web UI — persistent autonomous agent interface
+
+  ## References
+  - Architecture: ARCHITECTURE.md
+  - Roadmap: ROADMAP.md, SPRINTS.md
+  - Milestone roadmap: /Users/user/Code/binance/risk/openspec-projects/docs/hermes-milestone-roadmap.md
+  - Gap analysis: /Users/user/Code/binance/risk/openspec-projects/docs/hermes-gap-analysis.md
+  - Key functionalities: /Users/user/Code/binance/risk/openspec-projects/docs/hermes-key-functionalities.md
+
+  ## Environment
+  All credentials via env vars (~/.api_keys), never hardcoded.
+  HERMES_WEBUI_HOST, HERMES_WEBUI_PORT, HERMES_WEBUI_STATE_DIR, etc.
+
+  ## Design Principles
+  - No build step, no bundler, no framework — Python stdlib + vanilla JS
+  - Thin routing shell (server.py) delegates to api/ modules
+  - Kanban uses hermes_cli.kanban_db as sole source of truth
+  - Sessions persisted as JSON files on disk
+  - Atomic writes via tmp+rename pattern
+  - SSE for real-time updates (events, status, streaming)
+  - Graceful degradation when agent deps unavailable
+
+  ## UI
+  Dark-themed three-panel layout (sidebar, chat, workspace).
+  Model/profile/workspace controls in composer footer.
+  Context ring for token usage. Hermes Control Center modal for settings.
+
+rules:
+  proposal:
+    - Keep proposals short and concise
+    - Use mermaid to visualize architecture, tasks, and dependencies
+
+  tasks:
+    - Break into max 2-hour parallelizable chunks
+    - SMART: Specific, Measurable, Achievable, Relevant, Time-bound
+    - Show dependency graph via mermaid
+    - Use Multi-Agent and Worktree by default to speed up implementation
+
+  apply:
+    - Never commit or push without explicit user permission
+    - MUST run pytest tests/ after finishing work — fix until all pass
+    - Reuse existing patterns from api/ modules (helpers, config, kanban_bridge)
+    - No build step required — all changes must work with raw Python + JS
+
+  specs:
+    - All new API endpoints follow existing /api/* pattern from routes.py
+    - SSE events for real-time status changes
+    - Atomic file writes for any disk persistence
+    - Thread-safety: use LOCK/STREAMS_LOCK for shared state mutations
