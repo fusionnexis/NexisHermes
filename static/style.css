@@ -3693,6 +3693,8 @@ body.kanban-mode .sidebar,
 .clarify-structured-content li{margin-left:16px;list-style-type:disc}
 .clarify-structured-actions{display:flex;gap:8px;justify-content:flex-end}
 .clarify-structured-mode .clarify-card-inner{display:none}
+/* M7: Retry badge on kanban cards */
+.kanban-retry-badge{font-size:10px;color:#f59e0b;flex-shrink:0;font-weight:600}
 /* M5: QA progress dots on kanban cards */
 .kanban-qa-progress{font-size:12px;letter-spacing:2px;flex-shrink:0}
 /* M5: QA report clarify card */

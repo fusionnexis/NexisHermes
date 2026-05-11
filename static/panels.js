@@ -1208,6 +1208,16 @@ function _kanbanRenderBoard(){
   board.innerHTML = columns.map(_kanbanRenderColumn).join('');
 }
 
+function _kanbanRetryBadge(task){
+  if (!task.result) return '';
+  try {
+    const data = typeof task.result === 'string' ? JSON.parse(task.result) : task.result;
+    const retries = data && data.qa_retries;
+    if (!retries || retries <= 0) return '';
+    return `<span class="kanban-retry-badge" data-testid="retry-badge">🔄 ${retries}/3</span>`;
+  } catch(e) { return ''; }
+}
+
 function _kanbanQaProgress(task){
   if (!task.result) return '';
   try {
@@ -1251,7 +1261,7 @@ function _kanbanCard(task, status){
     <div class="kanban-card-topline"><span class="kanban-card-id">${esc(task.id || '')}</span>${priority ? `<span class="kanban-badge priority">P${priority}</span>` : ''}${task.tenant ? `<span class="kanban-badge tenant">${esc(task.tenant)}</span>` : ''}${wtBadge}${sizeBadge}${sessionBadge}</div>
     <div class="kanban-card-title">${esc(_kanbanTaskTitle(task))}</div>
     ${body ? `<div class="kanban-card-body">${_kanbanRenderMarkdown(body)}</div>` : ''}
-    <div class="kanban-card-meta">${assignee}${comments ? `<span class="kanban-card-metric">💬 ${comments}</span>` : ''}${linkTotal ? `<span class="kanban-card-metric">↔ ${linkTotal}</span>` : ''}${age ? `<span class="kanban-card-age">${esc(age)}</span>` : ''}${_kanbanQaProgress(task)}</div>
+    <div class="kanban-card-meta">${assignee}${comments ? `<span class="kanban-card-metric">💬 ${comments}</span>` : ''}${linkTotal ? `<span class="kanban-card-metric">↔ ${linkTotal}</span>` : ''}${age ? `<span class="kanban-card-age">${esc(age)}</span>` : ''}${_kanbanRetryBadge(task)}${_kanbanQaProgress(task)}</div>
     ${_kanbanCardQuickActions(task)}
   </article>`;
 }

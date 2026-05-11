@@ -783,6 +783,15 @@ def claim_task_with_binding(conn, task_id: str, profile_name: str, role: str,
     worktree_result = None
     worktree_path = None
 
+    # M7: If task already has workspace_path (QA retry re-claim), reuse it
+    try:
+        existing_ws_row = conn.execute("SELECT workspace_path FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if existing_ws_row and existing_ws_row["workspace_path"]:
+            worktree_path = existing_ws_row["workspace_path"]
+            create_worktree = False  # reuse existing worktree
+    except Exception:
+        pass
+
     if create_worktree:
         from api.worktree import create_worktree as _create_wt, _is_git_repo, _git_available
         workspace_path = _Path(str(workspace))
@@ -911,14 +920,48 @@ def _evaluate_qa_result(conn, qa_task_id: str, result_str: str) -> None:
         "qa_task_id": qa_task_id,
     })
 
-    # If failed, block the parent task immediately
+    # M7: QA failure retry loop — retry up to max_qa_retries before blocking
     if not all_pass and parent_id:
         try:
-            conn.execute("UPDATE tasks SET status = 'blocked' WHERE id = ?", (parent_id,))
+            # Read current retry count from parent's result JSON
+            parent_row = conn.execute("SELECT result FROM tasks WHERE id = ?", (parent_id,)).fetchone()
+            parent_result = {}
+            if parent_row and parent_row["result"]:
+                try:
+                    parent_result = _json.loads(parent_row["result"]) if isinstance(parent_row["result"], str) else parent_row["result"]
+                except (ValueError, TypeError):
+                    parent_result = {}
+            qa_retries = int(parent_result.get("qa_retries", 0))
+
+            # Read max retries from config (default 3)
+            max_qa_retries = 3
+            try:
+                from api.config import get_config
+                cfg = get_config()
+                max_qa_retries = int((cfg.get("execution") or {}).get("max_qa_retries", 3))
+            except Exception:
+                pass
+
             # Add failure comment to parent
             if hasattr(kb, "add_comment"):
                 kb.add_comment(conn, parent_id, "system",
-                               f"QA failed: {phase_summary[:500]}")
+                               f"QA failed (attempt {qa_retries + 1}/{max_qa_retries}): {phase_summary[:500]}")
+
+            if qa_retries < max_qa_retries:
+                # Retry: set parent back to ready, increment counter
+                parent_result["qa_retries"] = qa_retries + 1
+                conn.execute("UPDATE tasks SET status = 'ready', result = ? WHERE id = ?",
+                             (_json.dumps(parent_result), parent_id))
+            else:
+                # Max retries reached: block + escalate via clarify
+                conn.execute("UPDATE tasks SET status = 'blocked' WHERE id = ?", (parent_id,))
+                from api.clarify import submit_pending as _submit_escalation
+                _submit_escalation(session_key, {
+                    "kind": "escalation",
+                    "question": f"QA failed {qa_retries + 1} times — manual intervention needed.",
+                    "content": phase_summary,
+                    "task_id": parent_id,
+                })
         except Exception:
             pass
 

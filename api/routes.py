@@ -2939,6 +2939,10 @@ def handle_get(handler, parsed) -> bool:
         j(handler, build_system_health_payload())
         return True
 
+    if parsed.path == "/api/execution/status":
+        from api.execution import get_execution_status
+        return j(handler, get_execution_status())
+
     if parsed.path == "/api/models":
         return j(handler, get_available_models())
 
