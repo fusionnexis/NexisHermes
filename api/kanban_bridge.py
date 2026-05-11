@@ -462,6 +462,25 @@ def _patch_task(conn, task_id: str, body: dict):
     if status == "done":
         if not kb.complete_task(conn, task_id, result=body.get("result"), summary=body.get("summary")):
             raise LookupError("task not found")
+        # M6: Release gate — if task has workspace_path, submit clarify for merge approval
+        try:
+            row = conn.execute("SELECT workspace_path, session_id FROM tasks WHERE id = ?",
+                                (task_id,)).fetchone()
+            ws_path = row["workspace_path"] if row else None
+            session_key = (row["session_id"] if row and row["session_id"] else None) or task_id
+            if ws_path:
+                from api.clarify import submit_pending as _submit_release_gate
+                branch = ws_path.split("/")[-1] if "/" in ws_path else ws_path
+                _submit_release_gate(session_key, {
+                    "kind": "release_gate",
+                    "question": f"Merge branch '{branch}' and archive task?",
+                    "content": f"Branch: {branch}\nWorktree: {ws_path}\nTask: {task_id}",
+                    "task_id": task_id,
+                    "workspace_path": ws_path,
+                    "branch": branch,
+                })
+        except Exception:
+            pass
     elif status == "blocked":
         if not kb.block_task(conn, task_id, reason=body.get("block_reason") or body.get("reason")):
             raise LookupError("task not found")

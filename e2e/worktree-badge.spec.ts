@@ -315,7 +315,7 @@ test.describe('US-4: Create Worktree button in task detail', () => {
     await page.locator('#kanbanTaskPreview').waitFor({ state: 'visible' });
 
     // Assert: "Create Worktree" button is visible in the detail
-    const createBtn = page.locator('.kanban-detail-worktree >> button', { hasText: 'Create Worktree' });
+    const createBtn = page.locator('#kanbanTaskPreview button', { hasText: 'Create Worktree' });
     await expect(createBtn).toBeVisible();
   });
 
@@ -373,12 +373,12 @@ test.describe('US-4: Create Worktree button in task detail', () => {
     await page.locator('#kanbanTaskPreview').waitFor({ state: 'visible' });
 
     // Assert: worktree badge in detail panel shows branch name
-    const detailBadge = page.locator('[data-testid="worktree-badge-detail"]');
+    const detailBadge = page.locator('#kanbanTaskPreview .kanban-badge.worktree');
     await expect(detailBadge).toBeVisible();
     await expect(detailBadge).toContainText('wt-remove-branch');
 
     // Assert: "Remove Worktree" button is visible
-    const removeBtn = page.locator('.kanban-detail-worktree >> button', { hasText: 'Remove Worktree' });
+    const removeBtn = page.locator('#kanbanTaskPreview button', { hasText: 'Remove' });
     await expect(removeBtn).toBeVisible();
   });
 });

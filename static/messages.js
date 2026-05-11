@@ -1925,6 +1925,33 @@ function showClarifyCard(pending) {
   const card = _ensureClarifyCardDom();
   if (!card) return;
 
+  // M6: Release gate card
+  if (kind === 'release_gate') {
+    card.classList.remove('clarify-text-mode');
+    card.classList.add('clarify-structured-mode');
+    const branch = pending.branch || '?';
+    const wsPath = pending.workspace_path || '';
+    card.innerHTML = `
+      <div class="clarify-release-gate-card">
+        <div class="clarify-release-gate-header">Release Gate</div>
+        <div class="clarify-structured-content">
+          <strong>Branch:</strong> ${branch.replace(/</g,'&lt;')}<br>
+          <strong>Worktree:</strong> ${wsPath.replace(/</g,'&lt;')}<br>
+          <strong>Action:</strong> Merge branch into main workspace and archive task.
+        </div>
+        <div class="clarify-structured-actions">
+          <button class="btn primary clarify-merge-btn" onclick="respondClarify('approve')">Merge &amp; Archive</button>
+          <button class="btn secondary clarify-reject-btn" onclick="respondClarify('reject')">Reject</button>
+        </div>
+      </div>
+    `;
+    _clarifySessionId = sid;
+    _clarifySignature = sig;
+    _startClarifyCountdown(pending);
+    card.classList.add('visible');
+    return;
+  }
+
   // M5: QA report card
   if (kind === 'qa_report') {
     card.classList.remove('clarify-text-mode');

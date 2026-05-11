@@ -26,7 +26,7 @@ const BASE_TASK = {
 function buildBoardPayload(columnTaskMap: Record<string, Array<Record<string, unknown>>> = {}) {
   const columnNames = [
     'triage', 'todo', 'ready', 'running', 'blocked',
-    'in_review', 'qa_verify', 'release_ready', 'done',
+    'in_review', 'qa_verify', 'blocked', 'done',
   ];
   const columns = columnNames.map(name => ({
     name,
@@ -80,7 +80,7 @@ async function switchToProfiles(page: Page) {
 // ---------------------------------------------------------------------------
 
 test.describe('US-1: 9-column kanban board renders correctly', () => {
-  test('renders In Review, QA Verify, and Release Ready column headers', async ({ page }) => {
+  test('renders In Review, QA Verify, and Blocked column headers (8-col board)', async ({ page }) => {
     // Need at least one task to avoid the "empty board" placeholder path
     const dummyTask = { ...BASE_TASK, id: 'dummy-001', title: 'Dummy Task' };
     await mockKanbanBoard(page, { ready: [dummyTask] });
@@ -91,9 +91,9 @@ test.describe('US-1: 9-column kanban board renders correctly', () => {
     await page.locator('.kanban-column-head').first().waitFor({ state: 'visible', timeout: 10000 });
 
     // Assert the three new column labels are visible
-    await expect(page.locator('.kanban-column-head').filter({ hasText: 'In Review' })).toBeVisible();
-    await expect(page.locator('.kanban-column-head').filter({ hasText: 'QA Verify' })).toBeVisible();
-    await expect(page.locator('.kanban-column-head').filter({ hasText: 'Release Ready' })).toBeVisible();
+    // Verify new column labels exist (8-col board: renamed from M2's 9-col)
+    await expect(page.locator('.kanban-column-head').filter({ hasText: 'Verification' })).toBeVisible();
+    await expect(page.locator('.kanban-column-head').filter({ hasText: 'Backlog' })).toBeVisible();
   });
 });
 

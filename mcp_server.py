@@ -633,7 +633,115 @@ TOOLS = [
             "required": ["worktree_id", "session_id"],
         },
     ),
+    Tool(
+        name="kanban_create_task",
+        description="Create a kanban task on the active board.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Task title (required)"},
+                "body": {"type": "string", "description": "Task description"},
+                "assignee": {"type": "string", "description": "Assignee (profile/role format)"},
+                "status": {"type": "string", "description": "Initial status (default: triage)"},
+                "priority": {"type": "integer", "description": "Priority (0-100)"},
+                "task_size": {"type": "string", "description": "small, medium, or large"},
+                "tenant": {"type": "string", "description": "Tenant/team slug"},
+            },
+            "required": ["title"],
+        },
+    ),
+    Tool(
+        name="kanban_list_tasks",
+        description="List kanban tasks from the active board, optionally filtered by status.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "description": "Filter by status (e.g. ready, running, done)"},
+            },
+            "required": [],
+        },
+    ),
+    Tool(
+        name="kanban_update_task_status",
+        description="Update a kanban task's status via PATCH.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "Task ID to update"},
+                "status": {"type": "string", "description": "New status value"},
+            },
+            "required": ["task_id", "status"],
+        },
+    ),
+    Tool(
+        name="kanban_get_task",
+        description="Get full task details including comments, events, and links.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "Task ID to retrieve"},
+            },
+            "required": ["task_id"],
+        },
+    ),
 ]
+
+
+async def handle_kanban_create_task(arguments: dict) -> list[TextContent]:
+    title = arguments.get("title")
+    if not title:
+        return [TextContent(type="text", text=json.dumps({"error": "title is required"}))]
+    body = {"title": title}
+    for k in ("body", "assignee", "status", "priority", "task_size", "tenant"):
+        if arguments.get(k) is not None:
+            body[k] = arguments[k]
+    result = _api_post("/api/kanban/tasks", body)
+    return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+
+
+async def handle_kanban_list_tasks(arguments: dict) -> list[TextContent]:
+    status_filter = arguments.get("status")
+    result = _api_post("/api/kanban/board", {})  # board returns all columns
+    if "error" in result:
+        return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
+    tasks = []
+    for col in result.get("columns", []):
+        if status_filter and col.get("name") != status_filter:
+            continue
+        for task in col.get("tasks", []):
+            tasks.append({"id": task.get("id"), "title": task.get("title"), "status": col.get("name"),
+                          "assignee": task.get("assignee"), "priority": task.get("priority")})
+    return [TextContent(type="text", text=json.dumps({"tasks": tasks, "count": len(tasks)}, ensure_ascii=False, indent=2))]
+
+
+async def handle_kanban_update_task_status(arguments: dict) -> list[TextContent]:
+    task_id = arguments.get("task_id")
+    status = arguments.get("status")
+    if not task_id or not status:
+        return [TextContent(type="text", text=json.dumps({"error": "task_id and status required"}))]
+    result = _api_post(f"/api/kanban/tasks/{task_id}/patch", {"status": status})
+    return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+
+
+async def handle_kanban_get_task(arguments: dict) -> list[TextContent]:
+    task_id = arguments.get("task_id")
+    if not task_id:
+        return [TextContent(type="text", text=json.dumps({"error": "task_id is required"}))]
+    import urllib.request, urllib.error
+    port = os.environ.get("HERMES_WEBUI_PORT", "8787")
+    password = os.environ.get("HERMES_WEBUI_PASSWORD", "")
+    url = f"http://127.0.0.1:{port}/api/kanban/tasks/{task_id}"
+    req = urllib.request.Request(url)
+    if password:
+        import base64
+        req.add_header("Authorization", "Basic " + base64.b64encode(f":{password}".encode()).decode())
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+        return [TextContent(type="text", text=json.dumps(data, ensure_ascii=False, indent=2))]
+    except Exception as e:
+        return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
+
 
 HANDLERS = {
     "list_projects": handle_list_projects,
@@ -646,6 +754,10 @@ HANDLERS = {
     "worktree_create": handle_worktree_create,
     "worktree_list": handle_worktree_list,
     "worktree_remove": handle_worktree_remove,
+    "kanban_create_task": handle_kanban_create_task,
+    "kanban_list_tasks": handle_kanban_list_tasks,
+    "kanban_update_task_status": handle_kanban_update_task_status,
+    "kanban_get_task": handle_kanban_get_task,
 }
 
 

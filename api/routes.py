@@ -668,14 +668,56 @@ def _run_cron_tracked(job, profile_home=None, execution_profile_home=None):
             mark_job_run(job_id, _success, _error)
 
         _with_cron_home(profile_home, _persist_success)
+
+        # M6: Cron-to-Kanban bridge — auto-create kanban task on success/failure
+        try:
+            _cron_create_kanban_task(job, success, output, error)
+        except Exception:
+            logger.debug("Cron-to-kanban task creation failed for %s", job_id)
     except Exception as e:
         logger.exception("Manual cron run failed for job %s", job_id)
         try:
             _with_cron_home(profile_home, lambda: mark_job_run(job_id, False, str(e)))
         except Exception:
             logger.debug("Failed to mark manual cron run failure for %s", job_id)
+        try:
+            _cron_create_kanban_task(job, False, "", str(e))
+        except Exception:
+            pass
     finally:
         _mark_cron_done(job_id)
+
+def _cron_create_kanban_task(job: dict, success: bool, output: str, error: str):
+    """M6: Auto-create a kanban task from cron job completion."""
+    job_id = job.get("id", "")
+    job_name = job.get("name") or job.get("prompt", "")[:60] or job_id
+    config = job.get("config", {}) or {}
+
+    if success and not config.get("on_success_create_task"):
+        return
+    if not success and not config.get("on_failure_create_task"):
+        return
+
+    outcome = "success" if success else "failed"
+    title = f"Cron: {job_name} — {outcome}"
+    body = f"Cron job `{job_id}` {outcome}.\n\n"
+    if error:
+        body += f"Error: {error[:500]}\n\n"
+    if output:
+        body += f"Output (truncated):\n```\n{output[:1000]}\n```"
+
+    try:
+        from api.kanban_bridge import _create_task_payload, _conn
+        with _conn() as conn:
+            from api.kanban_bridge import _kb
+            kb = _kb()
+            task_id = kb.create_task(
+                conn, title=title, body=body, created_by="cron",
+                tenant="cron", priority=1 if not success else 0,
+            )
+    except Exception:
+        logger.debug("Failed to create kanban task for cron %s", job_id)
+
 
 _PROVIDER_ALIASES = {
     "claude": "anthropic",
@@ -7582,6 +7624,57 @@ def _handle_clarify_respond(handler, body):
             _patch_task_payload(clarify_task_id, {"status": "done"})
         except Exception:
             pass
+
+    # M6: Release gate approve → git merge + worktree remove + archive
+    if clarify_kind == "release_gate" and clarify_task_id:
+        if is_approve:
+            branch = clarify_data.get("branch", "")
+            ws_path = clarify_data.get("workspace_path", "")
+            try:
+                # Merge the branch into the main workspace
+                from api.workspace import get_last_workspace
+                main_ws = str(get_last_workspace())
+                result = subprocess.run(
+                    ["git", "merge", branch], cwd=main_ws,
+                    capture_output=True, text=True, timeout=30,
+                )
+                if result.returncode != 0:
+                    # Merge conflict — block the task
+                    from api.kanban_bridge import _patch_task_payload
+                    _patch_task_payload(clarify_task_id, {"status": "blocked"})
+                    try:
+                        from api.kanban_bridge import _conn, _kb
+                        with _conn() as conn:
+                            kb = _kb()
+                            if hasattr(kb, "add_comment"):
+                                kb.add_comment(conn, clarify_task_id, "system",
+                                               f"Merge conflict:\n{result.stderr[:500]}")
+                    except Exception:
+                        pass
+                else:
+                    # Merge succeeded — remove worktree + archive
+                    try:
+                        from api.worktree import remove_worktree
+                        from pathlib import Path
+                        # Derive workspace from worktree path
+                        wt_id = Path(ws_path).name
+                        main_workspace = Path(ws_path).parent / Path(ws_path).name.rsplit("-", 1)[0] if "-" in Path(ws_path).name else Path(main_ws)
+                        remove_worktree(Path(main_ws), wt_id)
+                    except Exception:
+                        pass  # worktree remove failure doesn't block archive
+                    try:
+                        from api.kanban_bridge import _patch_task_payload
+                        _patch_task_payload(clarify_task_id, {"status": "archived"})
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        elif is_reject:
+            try:
+                from api.kanban_bridge import _patch_task_payload
+                _patch_task_payload(clarify_task_id, {"status": "blocked"})
+            except Exception:
+                pass
 
     return j(handler, {"ok": True, "response": response})
 
