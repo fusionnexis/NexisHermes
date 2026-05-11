@@ -7525,7 +7525,64 @@ def _handle_clarify_respond(handler, body):
     response = str(response or "").strip()
     if not response:
         return bad(handler, "response is required")
+
+    # M4: Before resolving, snapshot the clarify data for post-resolve actions
+    from api.clarify import get_pending as _get_clarify_pending
+    clarify_data = _get_clarify_pending(sid) or {}
+    clarify_kind = clarify_data.get("kind", "text")
+    clarify_content = clarify_data.get("content", "")
+    clarify_task_id = clarify_data.get("task_id")
+    clarify_phase = clarify_data.get("phase")
+
     resolve_clarify(sid, response, resolve_all=False)
+
+    # M4: Clarify-to-memory bridge — approve saves to memory, reject rewinds task
+    is_approve = response.lower() in ("approve", "approved", "yes", "accept")
+    is_reject = response.lower() in ("reject", "rejected", "no", "deny")
+
+    if clarify_kind in ("plan", "proposal") and clarify_content:
+        if is_approve:
+            # Write plan/proposal content to memory directory
+            try:
+                from api.profiles import get_active_hermes_home
+                mem_dir = get_active_hermes_home() / "memories"
+                mem_dir.mkdir(parents=True, exist_ok=True)
+                key = clarify_task_id or sid
+                mem_file = mem_dir / f"clarify-{key}.md"
+                mem_file.write_text(clarify_content, encoding="utf-8")
+            except Exception:
+                pass  # Memory write failure is non-blocking
+
+            # Phase progression for multi-phase proposals
+            if clarify_kind == "proposal" and clarify_phase and clarify_phase < 3:
+                from api.clarify import submit_pending as _submit_clarify
+                phase_labels = {2: "Proposal Review", 3: "Task Breakdown Review"}
+                next_phase = clarify_phase + 1
+                _submit_clarify(sid, {
+                    "kind": "proposal",
+                    "phase": next_phase,
+                    "phase_label": phase_labels.get(next_phase, f"Phase {next_phase}"),
+                    "question": f"Please review Phase {next_phase} of 3.",
+                    "content": "(Pending — agent will generate)",
+                    "task_id": clarify_task_id,
+                })
+
+        elif is_reject and clarify_task_id:
+            # Reject: move task back to todo (planned)
+            try:
+                from api.kanban_bridge import _patch_task_payload
+                _patch_task_payload(clarify_task_id, {"status": "todo"})
+            except Exception:
+                pass  # Task rewind failure is non-blocking
+
+    # M5: QA report approve → parent task done
+    if clarify_kind == "qa_report" and is_approve and clarify_task_id:
+        try:
+            from api.kanban_bridge import _patch_task_payload
+            _patch_task_payload(clarify_task_id, {"status": "done"})
+        except Exception:
+            pass
+
     return j(handler, {"ok": True, "response": response})
 
 

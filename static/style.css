@@ -3684,6 +3684,24 @@ body.kanban-mode .sidebar,
 .kanban-detail-event-row{display:flex;justify-content:space-between;font-size:11px;padding:3px 0;border-bottom:1px solid var(--border)}
 .kanban-detail-event-kind{color:var(--text);font-weight:500}
 .kanban-detail-event-meta{color:var(--muted)}
+/* M4: Structured clarify cards (plan/proposal) */
+.clarify-plan-card,.clarify-proposal-card{padding:16px;border:1px solid var(--border);border-radius:10px;background:var(--bg);max-width:560px;margin:0 auto}
+.clarify-phase-label{font-size:11px;font-weight:650;color:var(--accent);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px}
+.clarify-structured-question{font-size:13px;color:var(--text);font-weight:550;margin-bottom:10px}
+.clarify-structured-content{font-size:12px;color:var(--text);line-height:1.6;background:var(--input-bg);border:1px solid var(--border);border-radius:8px;padding:12px;max-height:300px;overflow-y:auto;margin-bottom:12px}
+.clarify-structured-content h3{font-size:13px;font-weight:650;margin:8px 0 4px;color:var(--text)}
+.clarify-structured-content li{margin-left:16px;list-style-type:disc}
+.clarify-structured-actions{display:flex;gap:8px;justify-content:flex-end}
+.clarify-structured-mode .clarify-card-inner{display:none}
+/* M5: QA progress dots on kanban cards */
+.kanban-qa-progress{font-size:12px;letter-spacing:2px;flex-shrink:0}
+/* M5: QA report clarify card */
+.clarify-qa-report-card{padding:16px;border:1px solid var(--border);border-radius:10px;background:var(--bg);max-width:560px;margin:0 auto}
+.clarify-qa-report-card.qa-pass{border-color:#4ade80}
+.clarify-qa-report-card.qa-fail{border-color:#f87171}
+.clarify-qa-report-header{font-size:15px;font-weight:650;margin-bottom:10px}
+.qa-pass .clarify-qa-report-header{color:#4ade80}
+.qa-fail .clarify-qa-report-header{color:#f87171}
 .kanban-card-role-flag{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:4px;vertical-align:middle;flex-shrink:0}
 /* Task detail modal */
 .kanban-task-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;display:flex;align-items:center;justify-content:center;padding:16px}

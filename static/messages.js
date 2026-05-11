@@ -1911,6 +1911,7 @@ function _clarifySetControlsDisabled(disabled, loading=false) {
 function showClarifyCard(pending) {
   const sid = _rememberClarifyPending(pending);
   if (!_clarifyPromptBelongsToActiveSession(sid)) return;
+  const kind = pending.kind || 'text';
   const question = pending.question || pending.description || '';
   const choices = Array.isArray(pending.choices_offered)
     ? pending.choices_offered
@@ -1918,10 +1919,70 @@ function showClarifyCard(pending) {
   const sig = JSON.stringify({
     question,
     choices,
+    kind,
     sid: pending._session_id || (S.session && S.session.session_id) || null,
   });
   const card = _ensureClarifyCardDom();
   if (!card) return;
+
+  // M5: QA report card
+  if (kind === 'qa_report') {
+    card.classList.remove('clarify-text-mode');
+    card.classList.add('clarify-structured-mode');
+    const outcome = pending.outcome || 'unknown';
+    const isPass = outcome === 'pass';
+    const contentHtml = (pending.content || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+    const headerText = isPass ? 'All 4 phases passed ✅' : 'QA Pipeline FAILED ❌';
+    const btnText = isPass ? 'Approve' : 'Acknowledge';
+    const btnClass = isPass ? 'clarify-approve-btn' : 'clarify-acknowledge-btn';
+    card.innerHTML = `
+      <div class="clarify-qa-report-card ${isPass ? 'qa-pass' : 'qa-fail'}">
+        <div class="clarify-qa-report-header">${headerText}</div>
+        <div class="clarify-structured-content">${contentHtml}</div>
+        <div class="clarify-structured-actions">
+          <button class="btn primary ${btnClass}" onclick="respondClarify('approve')">${btnText}</button>
+          ${!isPass ? '<button class="btn secondary clarify-reject-btn" onclick="respondClarify(\'reject\')">Reject</button>' : ''}
+        </div>
+      </div>
+    `;
+    _clarifySessionId = sid;
+    _clarifySignature = sig;
+    _startClarifyCountdown(pending);
+    card.classList.add('visible');
+    return;
+  }
+
+  // M4: Structured clarify — render plan/proposal cards differently
+  if (kind === 'plan' || kind === 'proposal') {
+    card.classList.remove('clarify-text-mode');
+    card.classList.add('clarify-structured-mode');
+    const phaseLabel = pending.phase_label ? `<div class="clarify-phase-label">Phase ${pending.phase || ''}: ${pending.phase_label}</div>` : '';
+    const contentHtml = (pending.content || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/^## (.+)$/gm, '<h3>$1</h3>')
+      .replace(/^- (.+)$/gm, '<li>$1</li>')
+      .replace(/\n/g, '<br>');
+    const kindClass = kind === 'plan' ? 'clarify-plan-card' : 'clarify-proposal-card';
+    card.innerHTML = `
+      <div class="${kindClass}">
+        ${phaseLabel}
+        <div class="clarify-structured-question">${question.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
+        <div class="clarify-structured-content">${contentHtml}</div>
+        <div class="clarify-structured-actions">
+          <button class="btn primary clarify-approve-btn" onclick="respondClarify('approve')">Approve</button>
+          <button class="btn secondary clarify-reject-btn" onclick="respondClarify('reject')">Reject</button>
+        </div>
+      </div>
+    `;
+    _clarifySessionId = sid;
+    _clarifySignature = sig;
+    _startClarifyCountdown(pending);
+    card.classList.add('visible');
+    return;
+  }
+
+  // Default text mode
+  card.classList.remove('clarify-structured-mode');
+  card.classList.add('clarify-text-mode');
   const questionEl = $("clarifyQuestion");
   const choicesEl = $("clarifyChoices");
   const input = $("clarifyInput");

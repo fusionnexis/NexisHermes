@@ -1208,6 +1208,17 @@ function _kanbanRenderBoard(){
   board.innerHTML = columns.map(_kanbanRenderColumn).join('');
 }
 
+function _kanbanQaProgress(task){
+  if (!task.result) return '';
+  try {
+    const data = typeof task.result === 'string' ? JSON.parse(task.result) : task.result;
+    const phases = data && data.phases;
+    if (!Array.isArray(phases) || !phases.length) return '';
+    const dots = phases.map(p => p.status === 'pass' ? '✅' : p.status === 'fail' ? '❌' : '⬜').join('');
+    return `<span class="kanban-qa-progress" data-testid="qa-progress">${dots}</span>`;
+  } catch(e) { return ''; }
+}
+
 function _kanbanCard(task, status){
   const priority = Number(task.priority || 0);
   const links = task.link_counts || {};
@@ -1240,7 +1251,7 @@ function _kanbanCard(task, status){
     <div class="kanban-card-topline"><span class="kanban-card-id">${esc(task.id || '')}</span>${priority ? `<span class="kanban-badge priority">P${priority}</span>` : ''}${task.tenant ? `<span class="kanban-badge tenant">${esc(task.tenant)}</span>` : ''}${wtBadge}${sizeBadge}${sessionBadge}</div>
     <div class="kanban-card-title">${esc(_kanbanTaskTitle(task))}</div>
     ${body ? `<div class="kanban-card-body">${_kanbanRenderMarkdown(body)}</div>` : ''}
-    <div class="kanban-card-meta">${assignee}${comments ? `<span class="kanban-card-metric">💬 ${comments}</span>` : ''}${linkTotal ? `<span class="kanban-card-metric">↔ ${linkTotal}</span>` : ''}${age ? `<span class="kanban-card-age">${esc(age)}</span>` : ''}</div>
+    <div class="kanban-card-meta">${assignee}${comments ? `<span class="kanban-card-metric">💬 ${comments}</span>` : ''}${linkTotal ? `<span class="kanban-card-metric">↔ ${linkTotal}</span>` : ''}${age ? `<span class="kanban-card-age">${esc(age)}</span>` : ''}${_kanbanQaProgress(task)}</div>
     ${_kanbanCardQuickActions(task)}
   </article>`;
 }
@@ -2124,6 +2135,10 @@ function _kanbanRenderTaskDetail(data){
   const claimBtn = (task.status === 'ready' && !task.session_id)
     ? `<button class="btn primary" data-testid="claim-task-btn" onclick="claimKanbanTask('${esc(task.id)}')">Claim Task</button>`
     : '';
+  // Execute button (policy-routed: small/medium/large)
+  const executeBtn = (task.status === 'ready' && !task.session_id)
+    ? `<button class="btn primary" data-testid="execute-task-btn" onclick="executeKanbanTask('${esc(task.id)}')">Execute</button>`
+    : '';
 
   // Status actions
   const statusButtons = ['triage', 'todo', 'ready', 'blocked', 'done'].map(s =>
@@ -2150,7 +2165,7 @@ function _kanbanRenderTaskDetail(data){
       </div>
 
       <div class="kanban-detail-section-head">Move to</div>
-      <div class="kanban-status-actions">${statusButtons}${claimBtn}</div>
+      <div class="kanban-status-actions">${statusButtons}${claimBtn}${executeBtn}</div>
 
       <div class="kanban-detail-section-head">${esc(String(t('kanban_comments_count')).replace('{0}', comments.length))}</div>
       ${comments.length ? comments.map(_kanbanCommentHtml).join('') : `<div class="kanban-detail-empty-sec">${esc(t('kanban_no_comments'))}</div>`}
@@ -2219,6 +2234,27 @@ async function createWorktreeFromModal(){
   } catch(e) {
     if (resultEl) resultEl.textContent = e.message || String(e);
     if (btn) btn.disabled = false;
+  }
+}
+
+async function executeKanbanTask(taskId){
+  try {
+    const resp = await api('/api/kanban/execute', {
+      method: 'POST',
+      body: JSON.stringify({task_id: taskId}),
+    });
+    const route = resp.route || 'small';
+    if (route === 'small') {
+      showToast(`Task executing (small) — session ${resp.session?.session_id?.slice(0,6) || '?'}`);
+    } else if (route === 'medium') {
+      showToast('Task claimed — plan review pending (check chat for clarify card)');
+    } else if (route === 'large') {
+      showToast('Task claimed — proposal Phase 1 review pending');
+    }
+    await loadKanban(true);
+    await loadKanbanTask(taskId);
+  } catch(e) {
+    showToast('Execute failed: ' + (e.message || e), 'error');
   }
 }
 

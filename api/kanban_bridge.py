@@ -414,6 +414,8 @@ def _patch_task(conn, task_id: str, body: dict):
         updates["workspace_kind"] = wk
     if "workspace_path" in body:
         updates["workspace_path"] = body.get("workspace_path") or None
+    if "result" in body:
+        updates["result"] = body.get("result") or None
     if "task_size" in body:
         ts = body.get("task_size")
         if ts is not None and ts not in ("small", "medium", "large"):
@@ -435,6 +437,13 @@ def _patch_task(conn, task_id: str, body: dict):
     if "assignee" in body:
         if not kb.assign_task(conn, task_id, body.get("assignee") or None):
             raise LookupError("task not found")
+
+    # M5: If result was updated on a qa_verify task, evaluate QA pipeline completion
+    if "result" in body and updates.get("result"):
+        try:
+            _evaluate_qa_result(conn, task_id, updates["result"])
+        except Exception as _qa_exc:
+            logger.debug("QA result evaluation failed: %s", _qa_exc)
 
     if "status" not in body or body.get("status") in (None, ""):
         return
@@ -497,6 +506,12 @@ def _patch_task(conn, task_id: str, body: dict):
         # Pipeline-gated statuses: transition validation already passed above.
         if not _set_status_direct(conn, task_id, status):
             raise LookupError("task not found")
+        # M5: Auto-spawn QA child task when entering in_review
+        if status == "in_review":
+            try:
+                _spawn_qa_task(conn, task_id)
+            except Exception:
+                pass  # QA spawn failure is non-blocking
     else:
         raise ValueError(f"unknown status: {status}")
 
@@ -814,6 +829,213 @@ def _dispatch_payload(parsed):
         return asdict(result)
     except TypeError:
         return {"result": str(result)}
+
+
+def _evaluate_qa_result(conn, qa_task_id: str, result_str: str) -> None:
+    """Evaluate QA pipeline result — submit clarify report and update parent task."""
+    import json as _json
+    kb = _kb()
+
+    # Only process qa_verify tasks
+    # Read status directly from DB (ORM may have stale status for freshly-spawned QA tasks)
+    try:
+        row = conn.execute("SELECT status FROM tasks WHERE id = ?", (qa_task_id,)).fetchone()
+        task_status = row["status"] if row else None
+    except Exception:
+        task_status = None
+    if not task_status or task_status not in ("qa_verify", "triage"):
+        return
+
+    try:
+        result_data = _json.loads(result_str) if isinstance(result_str, str) else result_str
+    except (ValueError, TypeError):
+        return
+    if not isinstance(result_data, dict):
+        return
+
+    phases = result_data.get("phases")
+    if not isinstance(phases, list) or not phases:
+        return
+
+    # Check if all phases are resolved (no pending)
+    statuses = [p.get("status") for p in phases if isinstance(p, dict)]
+    if "pending" in statuses:
+        return  # Not all phases complete yet
+
+    all_pass = all(s == "pass" for s in statuses)
+    outcome = "pass" if all_pass else "fail"
+
+    # Find parent task ID from task_links
+    parent_ids = kb.parent_ids(conn, qa_task_id)
+    parent_id = parent_ids[0] if parent_ids else None
+
+    # Get or create session key for clarify
+    try:
+        row = conn.execute("SELECT session_id FROM tasks WHERE id = ?", (qa_task_id,)).fetchone()
+        session_key = row["session_id"] if row and row["session_id"] else qa_task_id
+    except Exception:
+        session_key = qa_task_id
+
+    # Submit QA report clarify
+    from api.clarify import submit_pending
+    phase_summary = "\n".join(
+        f"{'✅' if p.get('status')=='pass' else '❌'} {p.get('name','?')}: {p.get('status','?')}"
+        + (f" — {p.get('detail','')[:200]}" if p.get('detail') else "")
+        for p in phases if isinstance(p, dict)
+    )
+    submit_pending(session_key, {
+        "kind": "qa_report",
+        "outcome": outcome,
+        "question": f"QA Pipeline {'PASSED' if all_pass else 'FAILED'} — please review.",
+        "content": phase_summary,
+        "task_id": parent_id or qa_task_id,
+        "qa_task_id": qa_task_id,
+    })
+
+    # If failed, block the parent task immediately
+    if not all_pass and parent_id:
+        try:
+            conn.execute("UPDATE tasks SET status = 'blocked' WHERE id = ?", (parent_id,))
+            # Add failure comment to parent
+            if hasattr(kb, "add_comment"):
+                kb.add_comment(conn, parent_id, "system",
+                               f"QA failed: {phase_summary[:500]}")
+        except Exception:
+            pass
+
+
+def _spawn_qa_task(conn, parent_task_id: str) -> str | None:
+    """Auto-create a QA child task when a coder task enters in_review.
+
+    Returns the QA task ID on success, None on failure.
+    """
+    kb = _kb()
+    parent = kb.get_task(conn, parent_task_id)
+    if not parent:
+        return None
+
+    # Read workspace_path from DB (ORM may not have it)
+    ws_path = None
+    ws_kind = "scratch"
+    try:
+        row = conn.execute("SELECT workspace_path, workspace_kind FROM tasks WHERE id = ?",
+                            (parent_task_id,)).fetchone()
+        if row:
+            ws_path = row["workspace_path"]
+            ws_kind = row["workspace_kind"] or "scratch"
+    except Exception:
+        pass
+
+    qa_title = f"QA: {parent.title}"
+    qa_task_id = kb.create_task(
+        conn,
+        title=qa_title,
+        body=f"Automated QA verification for task {parent_task_id}",
+        assignee="qa/qa",
+        created_by="system",
+        tenant=getattr(parent, "tenant", None),
+        workspace_kind=ws_kind,
+        workspace_path=ws_path,
+    )
+
+    # Set status to qa_verify
+    conn.execute("UPDATE tasks SET status = 'qa_verify' WHERE id = ?", (qa_task_id,))
+
+    # Link parent → child
+    kb.link_tasks(conn, parent_task_id, qa_task_id)
+
+    # Store QA task ID in parent's result for frontend association
+    try:
+        import json as _json
+        conn.execute("UPDATE tasks SET result = ? WHERE id = ?",
+                     (_json.dumps({"qa_task_id": qa_task_id}), parent_task_id))
+    except Exception:
+        pass
+
+    return qa_task_id
+
+
+def _execution_policy_router(task_size: str | None) -> str:
+    """Route a task to the appropriate execution path based on task_size."""
+    if task_size in ("medium", "large"):
+        return task_size
+    return "small"
+
+
+def _execute_payload(body: dict) -> dict:
+    """POST /api/kanban/execute — route task to small/medium/large execution path."""
+    task_id = str(body.get("task_id") or "").strip()
+    if not task_id:
+        raise ValueError("task_id is required")
+    board = body.get("board") or None
+    plan_content = body.get("plan_content") or ""
+
+    kb = _kb()
+    with _conn(board=board) as conn:
+        task = kb.get_task(conn, task_id)
+        if not task:
+            raise LookupError("task not found")
+
+        # Read task_size from DB (ORM may not have it)
+        try:
+            row = conn.execute("SELECT task_size FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            task_size = row["task_size"] if row else None
+        except Exception:
+            task_size = None
+
+        route = _execution_policy_router(task_size)
+
+    # All routes start with claim
+    try:
+        from api.profiles import get_active_profile_name, get_profile_role
+        from api.workspace import get_last_workspace
+        profile_name = get_active_profile_name() or "default"
+        role = get_profile_role(profile_name)
+        workspace = get_last_workspace()
+    except Exception as exc:
+        raise ValueError(f"could not resolve profile/workspace: {exc}") from exc
+
+    with _conn(board=board) as conn:
+        claim_result = claim_task_with_binding(
+            conn, task_id, profile_name, role, workspace,
+            create_worktree=False,  # worktree creation is separate — execute just routes
+        )
+
+    result = {
+        "route": route,
+        "task": claim_result["task"],
+        "session": claim_result["session"],
+        "worktree": claim_result.get("worktree"),
+        "read_only": False,
+    }
+
+    if route == "medium":
+        # Submit a plan clarify for human approval
+        from api.clarify import submit_pending
+        session_id = claim_result["session"]["session_id"]
+        submit_pending(session_id, {
+            "kind": "plan",
+            "question": "Please review the execution plan for this task.",
+            "content": plan_content or "(Plan pending — agent will generate)",
+            "task_id": task_id,
+        })
+        result["clarify_pending"] = True
+
+    elif route == "large":
+        # Submit Phase 1 proposal clarify
+        from api.clarify import submit_pending
+        session_id = claim_result["session"]["session_id"]
+        submit_pending(session_id, {
+            "kind": "proposal",
+            "phase": 1,
+            "phase_label": "Design Review",
+            "question": "Please review the design proposal (Phase 1 of 3).",
+            "content": plan_content or "(Proposal pending — planner will generate)",
+            "task_id": task_id,
+        })
+        result["clarify_phase"] = 1
+
+    return result
 
 
 def _claim_payload(body: dict) -> dict:
@@ -1351,6 +1573,8 @@ def handle_kanban_post(handler, parsed, body) -> bool | None:
             return j(handler, _dispatch_payload(parsed)) or True
         if path == "/api/kanban/claim":
             return j(handler, _claim_payload(body)) or True
+        if path == "/api/kanban/execute":
+            return j(handler, _execute_payload(body)) or True
         if path == "/api/kanban/tasks/bulk":
             return j(handler, _bulk_tasks_payload(body, board=board)) or True
         if path == "/api/kanban/tasks":
